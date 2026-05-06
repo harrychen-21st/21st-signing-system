@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, User, ArrowRight, ListFilter, Printer } from 'lucide-react';
+import { apiGet } from './lib/api';
 
 interface AuditLog {
   ticketId: string;
@@ -154,8 +155,10 @@ export default function TrackDashboard() {
     setIsFetching(true);
     setHasSearched(true);
     try {
-      const res = await fetch(`/api/tickets/my/${encodeURIComponent(val)}`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/tickets/my/${encodeURIComponent(val)}`, {
+        action: 'getMyTickets',
+        email: val,
+      });
       setTickets(data.tickets || []);
     } catch (error) {
       console.error("Failed to fetch tickets", error);
@@ -180,8 +183,10 @@ export default function TrackDashboard() {
 
     setLoadingLogs(prev => ({ ...prev, [ticketId]: true }));
     try {
-      const res = await fetch(`/api/tickets/${ticketId}/logs`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/tickets/${ticketId}/logs`, {
+        action: 'getTicketLogs',
+        ticketId,
+      });
       setTickets(prev => prev.map(t => 
         t.id === ticketId ? { ...t, logs: data.logs } : t
       ));

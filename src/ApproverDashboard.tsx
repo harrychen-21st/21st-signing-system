@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Mail, Loader2, CheckCircle, XCircle, Clock, AlertCircle, FileText, MessageSquare } from 'lucide-react';
+import { apiGet, apiPost } from './lib/api';
 
 interface Ticket {
   id: string;
@@ -35,8 +36,10 @@ export default function ApproverDashboard() {
     setIsFetching(true);
     setHasSearched(true);
     try {
-      const res = await fetch(`/api/tickets/pending/${encodeURIComponent(val)}`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/tickets/pending/${encodeURIComponent(val)}`, {
+        action: 'getPendingTickets',
+        email: val,
+      });
       setTickets(data.tickets || []);
     } catch (error) {
       console.error("Failed to fetch tickets", error);
@@ -59,18 +62,11 @@ export default function ApproverDashboard() {
     setActiveModal(null); // Close modal right away
 
     try {
-      const res = await fetch(`/api/tickets/${ticket.id}/action`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          approverEmail: email,
-          comment: commentText || (action === 'approve' ? '主管核准' : '主管駁回')
-        })
+      const data = await apiPost<any>(`/api/tickets/${ticket.id}/action`, {
+        action,
+        approverEmail: email,
+        comment: commentText || (action === 'approve' ? '主管核准' : '主管駁回')
       });
-
-      if (!res.ok) throw new Error('Action failed');
-      const data = await res.json();
       
       if (data.success) {
         // 從清單中移除已處理的單據

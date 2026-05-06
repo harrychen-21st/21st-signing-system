@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Briefcase, User, Send, Loader2, FileSignature, CheckCircle, Upload, XCircle } from 'lucide-react';
+import { apiGet, apiPost } from './lib/api';
 
 export default function SubmitForm() {
   const [email, setEmail] = useState('');
@@ -18,8 +19,8 @@ export default function SubmitForm() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/form-types').then(res => res.json()),
-      fetch('/api/form-definitions').then(res => res.json())
+      apiGet<{formTypes: {id: string; name: string}[]}>('/api/form-types', { action: 'getFormTypes' }),
+      apiGet<{definitions: any[]}>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' })
     ]).then(([typesData, defsData]) => {
       if (typesData.formTypes && typesData.formTypes.length > 0) {
         setFormTypesData(typesData.formTypes);
@@ -56,8 +57,10 @@ export default function SubmitForm() {
     setIsFetchingUser(true);
     setUserError('');
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(userEmail.toLowerCase())}`);
-      const data = await res.json();
+      const data = await apiGet<any>(`/api/users/${encodeURIComponent(userEmail.toLowerCase())}`, {
+        action: 'getUser',
+        email: userEmail.toLowerCase(),
+      });
       if (data.success) {
         setUser(data.user);
       } else {
@@ -119,20 +122,14 @@ export default function SubmitForm() {
     }
 
     try {
-        const res = await fetch('/api/submit-approval', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                applicantEmail: email,
-                applicantName: user.name,
-                department: user.dept,
-                tickets: [
-                  { id: ticketId, formType, subject, amount, formData }
-                ]
-            })
+        await apiPost('/api/submit-approval', {
+            applicantEmail: email,
+            applicantName: user.name,
+            department: user.dept,
+            tickets: [
+              { id: ticketId, formType, subject, amount, formData }
+            ]
         });
-
-        if (!res.ok) throw new Error('Submission failed');
         setSubmitSuccess(true);
         setGeneratedTicketId(ticketId);
     } catch (error) {
