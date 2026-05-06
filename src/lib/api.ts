@@ -7,6 +7,7 @@ export const APPS_SCRIPT_URL =
 export const USE_APPS_SCRIPT_DIRECT = import.meta.env.PROD;
 
 type QueryValue = string | number | boolean | undefined | null;
+type JsonObject = Record<string, unknown>;
 
 function buildUrl(base: string, query?: Record<string, QueryValue>) {
   const url = new URL(base);
@@ -36,15 +37,66 @@ export async function apiGet<T>(path: string, appsScriptQuery?: Record<string, Q
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const url = USE_APPS_SCRIPT_DIRECT ? APPS_SCRIPT_URL : path;
+  const payload = USE_APPS_SCRIPT_DIRECT ? toAppsScriptPayload(path, body) : body;
+
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    throw new Error(`POST ${path} failed: ${res.status}`);
+    throw new Error(`POST ${url} failed: ${res.status}`);
   }
 
   return res.json();
+}
+
+function toAppsScriptPayload(path: string, body: unknown): unknown {
+  if (!body || typeof body !== 'object') {
+    return body;
+  }
+
+  const data = body as JsonObject;
+
+  if (path === '/api/submit-approval') {
+    return mapSubmitApprovalPayload(data);
+  }
+
+  return body;
+}
+
+function mapSubmitApprovalPayload(data: JsonObject) {
+  const applicantEmail = String(data.applicantEmail || '');
+  const applicantName = String(data.applicantName || '');
+  const department = String(data.department || '');
+  const tickets = Array.isArray(data.tickets) ? data.tickets : [];
+
+  const rows = tickets.map((ticket: any) => {
+    const createdAt = new Date();
+    const slaDeadline = new Date(createdAt.getTime() + 60 * 24 * 60 * 60 * 1000);
+
+    return [
+      ticket.id,
+      createdAt.toISOString(),
+      applicantEmail,
+      applicantName,
+      department,
+      ticket.formType,
+      'Pending',
+      '1',
+      slaDeadline.toISOString(),
+      ticket.subject || '',
+      ticket.amount || '',
+      'FALSE',
+      JSON.stringify(ticket.formData || {}),
+      '',
+    ];
+  });
+
+  return {
+    action: 'submitTickets',
+    rows,
+  };
 }

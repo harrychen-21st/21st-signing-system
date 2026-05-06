@@ -27,9 +27,32 @@
 ## 2026-05-06
 
 ### 變更摘要
+- 修正 GitHub Pages production 下 `submit-approval` POST 仍誤用本地 API payload 的問題，改為轉成 Apps Script `submitTickets` 所需格式。
+- 修正 `SubmitForm.tsx` 對 `FormDefinitions` 的解析方式，對齊 Apps Script `getData` 回傳格式。
+- 對尚未完成 Apps Script 直連的主管簽核與申請紀錄功能改成明確提示，避免 404/405 假性錯誤。
+- 補回 `AdminDashboard.tsx` 的 `USE_APPS_SCRIPT_DIRECT` 匯入並加上 Apps Script 讀取錯誤提示。
+
+### 影響檔案
+- `src/lib/api.ts`
+- `src/SubmitForm.tsx`
+- `src/ApproverDashboard.tsx`
+- `src/TrackDashboard.tsx`
+- `src/AdminDashboard.tsx`
+- `WORKLOG.md`
+
+### 驗證
+- 已驗證：`npm run build` 通過。
+- 未驗證：重新部署後的 GitHub Pages 站點是否已可成功送單，仍待實站驗證。
+- 未驗證：Apps Script 是否支援主管簽核與申請紀錄所需 API，仍待補齊。
+- 未驗證：單一登入、依帳號顯示分頁權限、公佈欄功能尚未恢復。
+
+## 2026-05-06
+
+### 變更摘要
 - 新增 `src/lib/api.ts`，建立 GitHub Pages / Apps Script 過渡期共用 API client。
 - 新增 `.github/workflows/deploy-pages.yml`，建立 GitHub Pages 自動部署工作流骨架。
 - 將 `SubmitForm.tsx`、`ApproverDashboard.tsx`、`TrackDashboard.tsx` 的部分 API 呼叫改為經由共用 API client。
+- 將 `AdminDashboard.tsx` 改為經由共用 API client 與 Apps Script 溝通，補齊表單種類與規格寫入流程。
 - 更新 `README.md`，補上 GitHub Pages 正式網址與 Apps Script Web App URL。
 
 ### 影響檔案
@@ -38,6 +61,7 @@
 - `src/SubmitForm.tsx`
 - `src/ApproverDashboard.tsx`
 - `src/TrackDashboard.tsx`
+- `src/AdminDashboard.tsx`
 - `README.md`
 - `WORKLOG.md`
 
@@ -45,7 +69,7 @@
 - 已驗證：GitHub Pages workflow 檔案已建立。
 - 已驗證：補上 `src/vite-env.d.ts` 後，可讓 `import.meta.env` 通過型別檢查。
 - 未驗證：Apps Script 是否已完整支援 `getPendingTickets`、`getMyTickets`、`getTicketLogs` 等 action 名稱仍待實際串接確認。
-- 未驗證：管理頁面 `AdminDashboard.tsx` 尚未完成 Apps Script 直連改造。
+- 未驗證：Apps Script 直接 POST 是否已處理 CORS 與 JSON body，仍待實站驗證。
 
 ## 2026-05-06
 

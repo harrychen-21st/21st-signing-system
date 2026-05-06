@@ -3,6 +3,7 @@ import { Settings, Plus, Trash2, Save, AlertCircle, GitMerge, Shield, Loader2, X
 import { GoogleGenAI, Type } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { apiGet, apiPost, USE_APPS_SCRIPT_DIRECT } from './lib/api';
 
 interface Rule {
   id: string;
@@ -56,21 +57,32 @@ export default function AdminDashboard() {
   const fetchInitialData = async () => {
     setIsLoading(true);
     try {
-      const [typesRes, defsRes] = await Promise.all([
-        fetch('/api/form-types'),
-        fetch('/api/form-definitions')
+      const [typesData, defsRaw] = await Promise.all([
+        apiGet<{formTypes: FormType[]}>('/api/form-types', { action: 'getFormTypes' }),
+        apiGet<any>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' })
       ]);
-      const typesData = await typesRes.json();
-      const defsData = await defsRes.json();
+
+      const defsRows = defsRaw.data || defsRaw.definitions || [];
+      const definitions = Array.isArray(defsRows) && defsRows.length > 0 && Array.isArray(defsRows[0])
+        ? defsRows.slice(1).map((r: any) => ({
+            formId: r[0],
+            fieldsMarkdown: r[1],
+            logicMarkdown: r[2],
+            configJSON: r[3] ? JSON.parse(r[3]) : null,
+          }))
+        : defsRows;
       
       setFormTypes(typesData.formTypes || []);
-      setAllDefinitions(defsData.definitions || []);
+      setAllDefinitions(definitions || []);
       
       if (typesData.formTypes?.length > 0 && !activeFormId) {
         setActiveFormId(typesData.formTypes[0].id);
       }
     } catch (error) {
       console.error("Failed to fetch admin data", error);
+      if (USE_APPS_SCRIPT_DIRECT) {
+        alert('系統管理目前無法從 Apps Script 讀取資料。請先確認 Apps Script 支援 getFormTypes 與 getData(FormDefinitions)。');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -101,7 +113,7 @@ export default function AdminDashboard() {
       const apiKey = (process as any).env?.GEMINI_API_KEY || (window as any).process?.env?.GEMINI_API_KEY;
       
       if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        throw new Error('尚未偵測到 GEMINI_API_KEY。請點擊左側「Settings (齒輪)」->「Secrets」進行設定。');
+        throw new Error('尚未偵測到 GEMINI_API_KEY。GitHub Pages 版本請改用 VITE_GEMINI_API_KEY，或先不要使用 AI 建模。');
       }
 
       const ai = new GoogleGenAI({ apiKey });
@@ -158,23 +170,39 @@ export default function AdminDashboard() {
     setIsSaving(true);
     try {
       // 1. Create Form Type
-      await fetch('/api/form-types', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: newFormId.toUpperCase(), name: newFormName })
+      await apiPost('/api/form-types', {
+        action: 'addFormType',
+        formId: newFormId.toUpperCase(),
+        formName: newFormName,
       });
 
       // 2. Sync Specs and Rules
       await Promise.all([
-        fetch(`/api/rules/${newFormId.toUpperCase()}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules: tempRules })
+        apiPost(`/api/rules/${newFormId.toUpperCase()}`, {
+          action: 'saveRules',
+          formType: newFormId.toUpperCase(),
+          rows: tempRules.map(r => [
+            r.id,
+            newFormId.toUpperCase(),
+            r.stage,
+            r.conditionField,
+            r.conditionOp,
+            r.conditionVal,
+            r.approverType,
+            r.approverValue,
+          ]),
         }),
-        fetch(`/api/form-definitions/${newFormId.toUpperCase()}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(tempSpecs)
+        apiPost(`/api/form-definitions/${newFormId.toUpperCase()}`, {
+          action: 'saveData',
+          sheet: 'FormDefinitions',
+          matchColumn: 1,
+          matchValue: newFormId.toUpperCase(),
+          row: [
+            newFormId.toUpperCase(),
+            tempSpecs.fieldsMarkdown,
+            tempSpecs.logicMarkdown,
+            JSON.stringify(tempSpecs.configJSON),
+          ],
         })
       ]);
 
@@ -198,17 +226,17 @@ export default function AdminDashboard() {
     setIsSaving(true);
     try {
         const spec = allDefinitions.find(d => d.formId === activeFormId);
-        const updatedSpec = {
-            formId: activeFormId,
-            fieldsMarkdown: editedFieldsMd,
-            logicMarkdown: editedLogicMd,
-            configJSON: spec?.configJSON || { fields: [] }
-        };
-
-        await fetch(`/api/form-definitions/${activeFormId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedSpec)
+        await apiPost(`/api/form-definitions/${activeFormId}`, {
+            action: 'saveData',
+            sheet: 'FormDefinitions',
+            matchColumn: 1,
+            matchValue: activeFormId,
+            row: [
+              activeFormId,
+              editedFieldsMd,
+              editedLogicMd,
+              JSON.stringify(spec?.configJSON || { fields: [] }),
+            ]
         });
 
         alert('規格已更新成功！');

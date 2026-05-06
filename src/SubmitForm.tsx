@@ -20,13 +20,22 @@ export default function SubmitForm() {
   useEffect(() => {
     Promise.all([
       apiGet<{formTypes: {id: string; name: string}[]}>('/api/form-types', { action: 'getFormTypes' }),
-      apiGet<{definitions: any[]}>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' })
+      apiGet<any>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' })
     ]).then(([typesData, defsData]) => {
       if (typesData.formTypes && typesData.formTypes.length > 0) {
         setFormTypesData(typesData.formTypes);
         setFormType(typesData.formTypes[0].id);
       }
-      setFormDefinitions(defsData.definitions || []);
+      const rows = defsData.data || defsData.definitions || [];
+      const definitions = Array.isArray(rows) && rows.length > 0 && Array.isArray(rows[0])
+        ? rows.slice(1).map((r: any) => ({
+            formId: r[0],
+            fieldsMarkdown: r[1],
+            logicMarkdown: r[2],
+            configJSON: r[3] ? JSON.parse(r[3]) : null,
+          }))
+        : rows;
+      setFormDefinitions(definitions || []);
     });
   }, []);
 

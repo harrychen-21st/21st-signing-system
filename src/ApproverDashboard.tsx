@@ -36,11 +36,8 @@ export default function ApproverDashboard() {
     setIsFetching(true);
     setHasSearched(true);
     try {
-      const data = await apiGet<any>(`/api/tickets/pending/${encodeURIComponent(val)}`, {
-        action: 'getPendingTickets',
-        email: val,
-      });
-      setTickets(data.tickets || []);
+      setTickets([]);
+      alert('主管簽核區目前尚未完成 GitHub Pages 直連 Apps Script，需先補 Apps Script 的待簽核查詢 API。');
     } catch (error) {
       console.error("Failed to fetch tickets", error);
       alert("無法取得簽核單，請稍後再試。");
@@ -62,18 +59,7 @@ export default function ApproverDashboard() {
     setActiveModal(null); // Close modal right away
 
     try {
-      const data = await apiPost<any>(`/api/tickets/${ticket.id}/action`, {
-        action,
-        approverEmail: email,
-        comment: commentText || (action === 'approve' ? '主管核准' : '主管駁回')
-      });
-      
-      if (data.success) {
-        // 從清單中移除已處理的單據
-        setTickets(prev => prev.filter(t => t.id !== ticket.id));
-      } else {
-        alert(data.error || '處理失敗');
-      }
+      alert('主管簽核送出功能目前尚未完成 GitHub Pages 直連 Apps Script。');
     } catch (error) {
       console.error("Action error", error);
       alert("操作失敗，請稍後再試。");

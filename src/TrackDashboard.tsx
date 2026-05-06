@@ -155,11 +155,8 @@ export default function TrackDashboard() {
     setIsFetching(true);
     setHasSearched(true);
     try {
-      const data = await apiGet<any>(`/api/tickets/my/${encodeURIComponent(val)}`, {
-        action: 'getMyTickets',
-        email: val,
-      });
-      setTickets(data.tickets || []);
+      setTickets([]);
+      alert('申請紀錄查詢目前尚未完成 GitHub Pages 直連 Apps Script，需先補 Apps Script 的查詢 API。');
     } catch (error) {
       console.error("Failed to fetch tickets", error);
       alert("無法取得申請紀錄，請稍後再試。");
@@ -183,13 +180,7 @@ export default function TrackDashboard() {
 
     setLoadingLogs(prev => ({ ...prev, [ticketId]: true }));
     try {
-      const data = await apiGet<any>(`/api/tickets/${ticketId}/logs`, {
-        action: 'getTicketLogs',
-        ticketId,
-      });
-      setTickets(prev => prev.map(t => 
-        t.id === ticketId ? { ...t, logs: data.logs } : t
-      ));
+      alert('簽核歷程目前尚未完成 GitHub Pages 直連 Apps Script。');
     } catch (error) {
       console.error("Failed to load logs", error);
     } finally {
