@@ -143,7 +143,7 @@ export default function SubmitForm() {
         setGeneratedTicketId(ticketId);
     } catch (error) {
         console.error("Error submitting form", error);
-        alert("送出失敗");
+        alert(`送出失敗: ${error instanceof Error ? error.message : '未知錯誤'}`);
     } finally {
         setIsSubmitting(false);
     }

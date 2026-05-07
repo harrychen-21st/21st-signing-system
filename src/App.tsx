@@ -7,6 +7,7 @@ import TrackDashboard from './TrackDashboard';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'submit' | 'track' | 'approve' | 'admin'>('submit');
+  const appVersion = (process as any).env?.APP_VERSION || 'local';
 
   return (
     <>
@@ -41,6 +42,8 @@ export default function App() {
             <Settings className="w-5 h-5" /> 系統管理
           </button>
         </div>
+
+        <div className="mb-4 text-[11px] text-slate-400 font-mono">build: {appVersion}</div>
 
         {activeTab === 'submit' && <SubmitForm />}
         {activeTab === 'track' && <TrackDashboard />}

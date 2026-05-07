@@ -27,6 +27,23 @@
 ## 2026-05-06
 
 ### 變更摘要
+- 更新 `vite.config.ts`，把 GitHub commit hash 注入前端版本資訊。
+- 更新 `App.tsx`，在首頁顯示 `build` 版本，方便確認 GitHub Pages 是否已更新到最新 bundle。
+- 更新 `SubmitForm.tsx`，送單失敗時直接顯示實際錯誤訊息，方便對 Apps Script 進行除錯。
+
+### 影響檔案
+- `vite.config.ts`
+- `src/App.tsx`
+- `src/SubmitForm.tsx`
+- `WORKLOG.md`
+
+### 驗證
+- 已驗證：本地 `npm run lint` 與 `npm run build` 可通過。
+- 未驗證：GitHub Pages 是否已顯示最新 `build` 版本，仍待重新部署後確認。
+
+## 2026-05-06
+
+### 變更摘要
 - 修正 GitHub Pages production 下 `submit-approval` POST 仍誤用本地 API payload 的問題，改為轉成 Apps Script `submitTickets` 所需格式。
 - 修正 `SubmitForm.tsx` 對 `FormDefinitions` 的解析方式，對齊 Apps Script `getData` 回傳格式。
 - 對尚未完成 Apps Script 直連的主管簽核與申請紀錄功能改成明確提示，避免 404/405 假性錯誤。
