@@ -9,6 +9,11 @@ export const USE_APPS_SCRIPT_DIRECT = import.meta.env.PROD;
 type QueryValue = string | number | boolean | undefined | null;
 type JsonObject = Record<string, unknown>;
 
+interface FormTypeOption {
+  id: string;
+  name: string;
+}
+
 function buildUrl(base: string, query?: Record<string, QueryValue>) {
   const url = new URL(base);
 
@@ -28,29 +33,73 @@ export async function apiGet<T>(path: string, appsScriptQuery?: Record<string, Q
     ? buildUrl(APPS_SCRIPT_URL, appsScriptQuery)
     : path;
 
-  const res = await fetch(url);
+  const res = await fetch(url, USE_APPS_SCRIPT_DIRECT ? { method: 'GET', mode: 'cors' } : undefined);
   if (!res.ok) {
     throw new Error(`GET ${url} failed: ${res.status}`);
   }
 
-  return res.json();
+  const data = await parseJsonResponse<T>(res);
+  return normalizeAppsScriptGetResponse(path, data) as T;
 }
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const url = USE_APPS_SCRIPT_DIRECT ? APPS_SCRIPT_URL : path;
   const payload = USE_APPS_SCRIPT_DIRECT ? toAppsScriptPayload(path, body) : body;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  const res = USE_APPS_SCRIPT_DIRECT
+    ? await fetch(url, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+      })
+    : await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
 
   if (!res.ok) {
     throw new Error(`POST ${url} failed: ${res.status}`);
   }
 
-  return res.json();
+  return parseJsonResponse<T>(res);
+}
+
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`Invalid JSON response: ${text.slice(0, 200)}`);
+  }
+}
+
+function normalizeAppsScriptGetResponse(path: string, data: unknown): unknown {
+  if (!USE_APPS_SCRIPT_DIRECT || !data || typeof data !== 'object') {
+    return data;
+  }
+
+  if (path === '/api/form-types') {
+    const raw = data as { formTypes?: FormTypeOption[]; data?: unknown };
+    if (Array.isArray(raw.formTypes)) {
+      return raw;
+    }
+
+    const rows = Array.isArray(raw.data) ? raw.data : [];
+    const formTypes = rows
+      .slice(1)
+      .filter((row): row is unknown[] => Array.isArray(row) && row.length >= 2)
+      .map((row) => ({
+        id: String(row[0] ?? ''),
+        name: String(row[1] ?? ''),
+      }))
+      .filter((row) => row.id && row.name);
+
+    return { ...raw, formTypes };
+  }
+
+  return data;
 }
 
 function toAppsScriptPayload(path: string, body: unknown): unknown {
