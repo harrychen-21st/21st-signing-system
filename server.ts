@@ -94,6 +94,23 @@ function blocksApprovalByCompliance(compliance: CompliancePayload) {
   );
 }
 
+function resolveApproverMatch(row: any, myRoles: string[], email: string) {
+  const approver = String(row[13] || "");
+  const formData = row[12] ? JSON.parse(row[12]) : {};
+  const directRole = String(row[18] || "");
+
+  if (!approver) return false;
+  if (approver.toLowerCase() === email) return true;
+  if (myRoles.includes(approver)) return true;
+
+  if (approver === AML_SPECIAL_ROLE) {
+    const specialRole = formData.__specialApproverRole || directRole || "ROLE:ADMIN_HEAD";
+    return myRoles.includes(specialRole);
+  }
+
+  return false;
+}
+
 function getNoticeBoardFallback() {
   return "";
 }
@@ -438,6 +455,9 @@ async function startServer() {
         const provisionalId = id || buildTicketId(formType, department);
         const needsAml = next.approver === AML_SPECIAL_ROLE ? "TRUE" : "FALSE";
 
+        const specialApproverRole = next.approver === AML_SPECIAL_ROLE ? String((allRules.find((rule: any) => rule[1] === formType && Number(rule[2]) === Number(next.stage) && String(rule[6] || '') === AML_SPECIAL_ROLE)?.[7]) || 'ROLE:ADMIN_HEAD') : '';
+        const formDataWithMeta = { ...formData, ...(specialApproverRole ? { __specialApproverRole: specialApproverRole } : {}) };
+
         return [
           provisionalId,                     // A: 單號 (TicketID)
           createdAt.toISOString(),           // B: 建立時間 (CreatedAt)
@@ -451,12 +471,12 @@ async function startServer() {
           subject || '',                     // J: 主旨/事由 (Subject)
           amount || '',                      // K: 金額 (Amount)
           needsAml,                          // L: 需AML查核
-          JSON.stringify(formData),          // M: 完整動態資料 (FormData JSON)
+          JSON.stringify(formDataWithMeta),  // M: 完整動態資料 (FormData JSON)
           next.approver,                     // N: 目前簽核者 (CurrentApprover)
           "",                               // O: AML結果
           "",                               // P: AML備註
           "",                               // Q: 關係人交易結果
-          ""                                // R: 關係人交易備註
+          specialApproverRole               // R: 特殊關卡角色
         ];
       });
 
@@ -529,12 +549,9 @@ async function startServer() {
       // 3. 過濾單據：狀態為 Pending，且 CurrentApprover 是我的信箱，或是我的角色
       const pendingTickets = ticketsRows.slice(1).filter((row: any) => {
         const tStatus = row[6];
-        const tApprover = row[13]; // N欄: CurrentApprover
         
         if (tStatus !== 'Pending') return false;
-        
-        const isMyTurn = (tApprover?.toLowerCase() === email) || myRoles.includes(tApprover);
-        return isMyTurn;
+        return resolveApproverMatch(row, myRoles, email);
       }).map((row: any) => ({
         id: row[0],
         createdAt: row[1],
@@ -555,10 +572,6 @@ async function startServer() {
           rp_comment: row[17] || ''
         }
       }));
-
-      if (pendingTickets.length === 0) {
-        return res.json({ tickets: mockTickets, source: 'demo_mock' });
-      }
 
       res.json({ tickets: pendingTickets, source: 'sheets' });
     } catch (error) {
@@ -763,10 +776,10 @@ async function startServer() {
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
 
     // Demo tickets for testing the UI
-    const mockTickets = [
-      { id: 'DEMO-AP-001', createdAt: new Date().toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'AP', subject: '行銷合作專案簽呈', amount: '', status: 'Pending', stage: '1', currentApprover: '林主管 - 行銷部', formData: { apSubject: '行銷合作專案簽呈', apDesc: '說明內容', external_collab: 'true', ext_company_name: '外部測試公司' } },
-      { id: 'DEMO-CS-002', createdAt: new Date(Date.now() - 86400000).toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'CS', subject: '經濟部變更登記用印', amount: '', status: 'Approved', stage: 'END', currentApprover: '', formData: { seal_type: '經濟部章', cs_desc: '需要用印' } }
-    ];
+      const mockTickets = [
+        { id: 'DEMO-AP-001', createdAt: new Date().toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'AP', subject: '行銷合作專案簽呈', amount: '', status: 'Pending', stage: '1', currentApprover: '林主管 - 行銷部', formData: { apSubject: '行銷合作專案簽呈', apDesc: '說明內容', external_collab: 'true', ext_company_name: '外部測試公司' } },
+        { id: 'DEMO-CS-002', createdAt: new Date(Date.now() - 86400000).toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'CS', subject: '經濟部變更登記用印', amount: '', status: 'Approved', stage: 'END', currentApprover: '', formData: { seal_type: '經濟部章', cs_desc: '需要用印' } }
+      ];
 
     if (!scriptUrl) {
       return res.json({ tickets: [mockTickets[0], mockTickets[1]], source: 'mock' });

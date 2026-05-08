@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Mail, Loader2, CheckCircle, XCircle, Clock, AlertCircle, FileText, MessageSquare } from 'lucide-react';
 import { apiGet, apiPost } from './lib/api';
 
@@ -37,6 +37,10 @@ export default function ApproverDashboard({ initialEmail = '' }: { initialEmail?
   const [amlComment, setAmlComment] = useState('');
   const [rpResult, setRpResult] = useState('');
   const [rpComment, setRpComment] = useState('');
+
+  useEffect(() => {
+    setEmail(initialEmail);
+  }, [initialEmail]);
 
   const fetchTickets = async () => {
     const val = email.toLowerCase().trim();
@@ -120,14 +124,7 @@ export default function ApproverDashboard({ initialEmail = '' }: { initialEmail?
         <div className="flex flex-col sm:flex-row gap-4 mb-8">
           <div className="relative flex-grow">
             <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
-            <input 
-              type="email" 
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && fetchTickets()}
-              placeholder="e.g. boss@company.com" 
-              className="form-input w-full !pl-11"
-            />
+            <div className="form-input w-full !pl-11 flex items-center text-slate-700 bg-slate-50">{email || '尚未登入'}</div>
           </div>
           <button 
             onClick={fetchTickets}

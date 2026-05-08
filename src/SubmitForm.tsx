@@ -200,12 +200,9 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
 
       <div className="mb-10 bg-white/60 p-6 rounded-2xl border border-slate-200">
         <div className="flex flex-col sm:flex-row gap-4">
-          <input 
-            type="email" value={email} onChange={(e) => setEmail(e.target.value)} onBlur={handleEmailBlur}
-            placeholder="請輸入申請人 Email" className="form-input flex-grow !h-14 !text-lg"
-          />
-          <button onClick={() => fetchUser(email)} disabled={isFetchingUser} className="bg-slate-800 text-white px-8 h-14 rounded-xl font-bold">
-            {isFetchingUser ? <Loader2 size={24} className="animate-spin" /> : '驗證身分'}
+          <div className="form-input flex-grow !h-14 !text-lg flex items-center text-slate-700 bg-slate-50">{email || '尚未登入'}</div>
+          <button onClick={() => fetchUser(email)} disabled={isFetchingUser || !email} className="bg-slate-800 text-white px-8 h-14 rounded-xl font-bold disabled:opacity-60">
+            {isFetchingUser ? <Loader2 size={24} className="animate-spin" /> : '重新載入身份'}
           </button>
         </div>
         {userError && <p className="text-amber-600 mt-3 text-sm font-medium">{userError}</p>}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, User, ArrowRight, ListFilter, Printer } from 'lucide-react';
 import { apiGet } from './lib/api';
 
@@ -137,6 +137,10 @@ export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: s
   const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({});
   const [printingTicketId, setPrintingTicketId] = useState<string | null>(null);
 
+  useEffect(() => {
+    setEmail(initialEmail);
+  }, [initialEmail]);
+
   const handlePrint = (ticketId: string) => {
     setPrintingTicketId(ticketId);
     setTimeout(() => {
@@ -155,8 +159,8 @@ export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: s
     setIsFetching(true);
     setHasSearched(true);
     try {
-      setTickets([]);
-      alert('申請紀錄查詢目前尚未完成 GitHub Pages 直連 Apps Script，需先補 Apps Script 的查詢 API。');
+      const data = await apiGet<{ tickets: MyTicket[] }>(`/api/tickets/my/${encodeURIComponent(val)}`);
+      setTickets(data.tickets || []);
     } catch (error) {
       console.error("Failed to fetch tickets", error);
       alert("無法取得申請紀錄，請稍後再試。");
@@ -180,7 +184,8 @@ export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: s
 
     setLoadingLogs(prev => ({ ...prev, [ticketId]: true }));
     try {
-      alert('簽核歷程目前尚未完成 GitHub Pages 直連 Apps Script。');
+      const data = await apiGet<{ logs: AuditLog[] }>(`/api/tickets/${encodeURIComponent(ticketId)}/logs`);
+      setTickets(prev => prev.map(ticket => ticket.id === ticketId ? { ...ticket, logs: data.logs || [] } : ticket));
     } catch (error) {
       console.error("Failed to load logs", error);
     } finally {
@@ -223,17 +228,10 @@ export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: s
         </p>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-4 mb-8">
+        <div className="flex flex-col sm:flex-row gap-4 mb-8">
         <div className="relative flex-grow">
           <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
-          <input 
-            type="email" 
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && fetchTickets()}
-            placeholder="e.g. test@company.com" 
-            className="form-input w-full !pl-11"
-          />
+          <div className="form-input w-full !pl-11 flex items-center text-slate-700 bg-slate-50">{email || '尚未登入'}</div>
         </div>
         <button 
           onClick={fetchTickets}
