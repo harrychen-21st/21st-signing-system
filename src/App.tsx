@@ -113,20 +113,22 @@ export default function App() {
           >
             <Search className="w-5 h-5" /> 我的申請紀錄
           </button>
-          <button 
-            onClick={() => setActiveTab('approve')}
-            disabled={!sessionUser || !canApprove}
-            className={`flex-1 min-w-[160px] flex justify-center items-center gap-2 px-4 py-3 lg:py-4 rounded-xl md:rounded-2xl font-semibold transition-all duration-300 ${activeTab === 'approve' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 scale-100 sm:scale-105' : 'bg-white/60 text-slate-600 hover:bg-white backdrop-blur-md'}`}
-          >
-            <CheckCircle className="w-5 h-5" /> 主管簽核區
-          </button>
-          <button 
-            onClick={() => setActiveTab('admin')}
-            disabled={!sessionUser || !isAdmin}
-            className={`flex-1 min-w-[160px] flex justify-center items-center gap-2 px-4 py-3 lg:py-4 rounded-xl md:rounded-2xl font-semibold transition-all duration-300 ${activeTab === 'admin' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 scale-100 sm:scale-105' : 'bg-white/60 text-slate-600 hover:bg-white backdrop-blur-md'}`}
-          >
-            <Settings className="w-5 h-5" /> 系統管理
-          </button>
+          {canApprove && (
+            <button 
+              onClick={() => setActiveTab('approve')}
+              className={`flex-1 min-w-[160px] flex justify-center items-center gap-2 px-4 py-3 lg:py-4 rounded-xl md:rounded-2xl font-semibold transition-all duration-300 ${activeTab === 'approve' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/30 scale-100 sm:scale-105' : 'bg-white/60 text-slate-600 hover:bg-white backdrop-blur-md'}`}
+            >
+              <CheckCircle className="w-5 h-5" /> 主管簽核區
+            </button>
+          )}
+          {isAdmin && (
+            <button 
+              onClick={() => setActiveTab('admin')}
+              className={`flex-1 min-w-[160px] flex justify-center items-center gap-2 px-4 py-3 lg:py-4 rounded-xl md:rounded-2xl font-semibold transition-all duration-300 ${activeTab === 'admin' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30 scale-100 sm:scale-105' : 'bg-white/60 text-slate-600 hover:bg-white backdrop-blur-md'}`}
+            >
+              <Settings className="w-5 h-5" /> 系統管理
+            </button>
+          )}
         </div>
 
         <div className="mb-4 text-[11px] text-slate-400 font-mono">build: {appVersion}</div>

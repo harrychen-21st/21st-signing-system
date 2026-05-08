@@ -65,6 +65,7 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
   const [apExtTaxId, setApExtTaxId] = useState('');
   const [apSubject, setApSubject] = useState('');
   const [apDesc, setApDesc] = useState('');
+  const [apAmount, setApAmount] = useState('');
 
   // 2. RD 請款單欄位 (Legacy Support)
   const [rdRefId, setRdRefId] = useState('');
@@ -73,11 +74,14 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
   const [rdPayMethod, setRdPayMethod] = useState('');
   const [rdDesc, setRdDesc] = useState('');
   const [rdFileCount, setRdFileCount] = useState(0);
+  const [rdVendor, setRdVendor] = useState('');
+  const [rdBoardApproved, setRdBoardApproved] = useState('NA');
 
   // 3. CS 用印申請單欄位 (Legacy Support)
   const [csRefId, setCsRefId] = useState('');
   const [csSealType, setCsSealType] = useState('經濟部章');
   const [csDesc, setCsDesc] = useState('');
+  const [csExternalParty, setCsExternalParty] = useState('');
 
   const fetchUser = async (userEmail: string) => {
     setIsFetchingUser(true);
@@ -138,14 +142,15 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
         // Legacy Native logic
         if (formType === 'AP') {
             subject = apSubject;
-            formData = { ALWAYS: "TRUE", apSubject, apDesc, external_collab: apExternal.toString(), ext_company_name: apExtName, ext_company_owner: apExtOwner, ext_tax_id: apExtTaxId };
+            amount = apAmount;
+            formData = { ALWAYS: "TRUE", apSubject, apDesc, amount: Number(apAmount || 0), external_collab: apExternal.toString(), ext_company_name: apExtName, ext_company_owner: apExtOwner, ext_tax_id: apExtTaxId };
         } else if (formType === 'RD') {
             subject = `請款單: ${rdExpenseType}`;
             amount = rdAmount;
-            formData = { ALWAYS: "TRUE", rd_ref_id: rdRefId, rd_expense_type: rdExpenseType, amount: Number(rdAmount), pay_method: rdPayMethod, description: rdDesc, file_count: rdFileCount };
+            formData = { ALWAYS: "TRUE", rd_ref_id: rdRefId, rd_expense_type: rdExpenseType, amount: Number(rdAmount), pay_method: rdPayMethod, description: rdDesc, file_count: rdFileCount, vendor_name: rdVendor, board_approved: rdBoardApproved };
         } else if (formType === 'CS') {
             subject = `用印申請: ${csSealType}`;
-            formData = { ALWAYS: "TRUE", cs_ref_id: csRefId, cs_seal_type: csSealType, description: csDesc };
+            formData = { ALWAYS: "TRUE", cs_ref_id: csRefId, seal_type: csSealType, description: csDesc, external_party: csExternalParty };
         }
     }
 
@@ -267,26 +272,62 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
                </div>
              ) : (
                // Legacy Native Forms
-               formType === 'AP' ? (
-                 <div className="space-y-6">
-                    <h3 className="text-xl font-bold">AP 簽呈單</h3>
-                    <input className="form-input" placeholder="簽呈主旨" value={apSubject} onChange={e => setApSubject(e.target.value)} required />
-                    <textarea className="form-input" rows={4} placeholder="簽呈內容說明" value={apDesc} onChange={e => setApDesc(e.target.value)} required />
-                 </div>
-               ) : formType === 'RD' ? (
-                 <div className="space-y-6">
-                    <h3 className="text-xl font-bold">RD 請款單</h3>
-                    <input className="form-input" placeholder="請款金額" type="number" value={rdAmount} onChange={e => setRdAmount(e.target.value)} required />
-                    <textarea className="form-input" rows={3} placeholder="用途說明" value={rdDesc} onChange={e => setRdDesc(e.target.value)} required />
-                 </div>
-               ) : formType === 'CS' ? (
-                 <div className="space-y-6">
-                    <h3 className="text-xl font-bold">CS 用印申請單</h3>
-                    <select className="form-input" value={csSealType} onChange={e => setCsSealType(e.target.value)}>
-                       <option value="經濟部章">經濟部章</option><option value="銀行用章">銀行用章</option>
-                    </select>
-                    <textarea className="form-input" rows={4} placeholder="文件說明" value={csDesc} onChange={e => setCsDesc(e.target.value)} required />
-                 </div>
+                formType === 'AP' ? (
+                  <div className="space-y-6">
+                     <h3 className="text-xl font-bold">AP 簽呈單</h3>
+                     <input className="form-input" placeholder="簽呈主旨" value={apSubject} onChange={e => setApSubject(e.target.value)} required />
+                     <input className="form-input" placeholder="預估金額" type="number" value={apAmount} onChange={e => setApAmount(e.target.value)} />
+                     <textarea className="form-input" rows={4} placeholder="簽呈內容說明" value={apDesc} onChange={e => setApDesc(e.target.value)} required />
+                     <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
+                       <input type="checkbox" checked={apExternal} onChange={e => setApExternal(e.target.checked)} />
+                       是否涉及外部合作廠商 / 第三方對象
+                     </label>
+                     {apExternal && (
+                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                         <input className="form-input" placeholder="合作廠商名稱" value={apExtName} onChange={e => setApExtName(e.target.value)} required />
+                         <input className="form-input" placeholder="負責人 / 聯絡窗口" value={apExtOwner} onChange={e => setApExtOwner(e.target.value)} required />
+                         <input className="form-input md:col-span-2" placeholder="統一編號 / 識別碼" value={apExtTaxId} onChange={e => setApExtTaxId(e.target.value)} />
+                       </div>
+                     )}
+                  </div>
+                ) : formType === 'RD' ? (
+                  <div className="space-y-6">
+                     <h3 className="text-xl font-bold">RD 請款單</h3>
+                     <input className="form-input" placeholder="對應申請 / 專案單號" value={rdRefId} onChange={e => setRdRefId(e.target.value)} />
+                     <select className="form-input" value={rdExpenseType} onChange={e => setRdExpenseType(e.target.value)}>
+                       <option value="代墊費用">代墊費用</option>
+                       <option value="採購付款">採購付款</option>
+                       <option value="合作費用">合作費用</option>
+                       <option value="顧問服務費">顧問服務費</option>
+                     </select>
+                     <input className="form-input" placeholder="請款金額" type="number" value={rdAmount} onChange={e => setRdAmount(e.target.value)} required />
+                     <input className="form-input" placeholder="受款對象 / 廠商名稱" value={rdVendor} onChange={e => setRdVendor(e.target.value)} required />
+                     <select className="form-input" value={rdPayMethod} onChange={e => setRdPayMethod(e.target.value)}>
+                       <option value="">請選擇付款方式</option>
+                       <option value="轉帳">轉帳</option>
+                       <option value="匯款">匯款</option>
+                       <option value="零用金">零用金</option>
+                     </select>
+                     <textarea className="form-input" rows={3} placeholder="用途說明" value={rdDesc} onChange={e => setRdDesc(e.target.value)} required />
+                     <select className="form-input" value={rdBoardApproved} onChange={e => setRdBoardApproved(e.target.value)}>
+                       <option value="NA">非關係人交易 / 不適用</option>
+                       <option value="YES">關係人交易且已董事會同意</option>
+                       <option value="NO">關係人交易但尚未董事會同意</option>
+                     </select>
+                  </div>
+                ) : formType === 'CS' ? (
+                  <div className="space-y-6">
+                     <h3 className="text-xl font-bold">CS 用印申請單</h3>
+                     <input className="form-input" placeholder="對應核准單號" value={csRefId} onChange={e => setCsRefId(e.target.value)} />
+                     <select className="form-input" value={csSealType} onChange={e => setCsSealType(e.target.value)}>
+                        <option value="經濟部章">經濟部章</option>
+                        <option value="銀行用章">銀行用章</option>
+                        <option value="法務章">法務章</option>
+                        <option value="合約便章">合約便章</option>
+                     </select>
+                     <input className="form-input" placeholder="外部往來對象 / 文件相對人" value={csExternalParty} onChange={e => setCsExternalParty(e.target.value)} />
+                     <textarea className="form-input" rows={4} placeholder="文件說明" value={csDesc} onChange={e => setCsDesc(e.target.value)} required />
+                  </div>
                ) : <div className="text-slate-400 italic">尚未定義此表單規格</div>
              )}
           </div>

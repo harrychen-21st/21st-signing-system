@@ -36,6 +36,7 @@ export default function AdminDashboard() {
   const [activeFormId, setActiveFormId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [noticeBoard, setNoticeBoard] = useState('');
 
   // Edit Mode for Tab A
   const [isEditingSpecs, setIsEditingSpecs] = useState(false);
@@ -57,9 +58,10 @@ export default function AdminDashboard() {
   const fetchInitialData = async () => {
     setIsLoading(true);
     try {
-      const [typesData, defsRaw] = await Promise.all([
+      const [typesData, defsRaw, noticeData] = await Promise.all([
         apiGet<{formTypes: FormType[]}>('/api/form-types', { action: 'getFormTypes' }),
-        apiGet<any>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' })
+        apiGet<any>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' }),
+        apiGet<{ value: string }>('/api/settings/NoticeBoard', { action: 'getSetting', key: 'NoticeBoard' })
       ]);
 
       const defsRows = defsRaw.data || defsRaw.definitions || [];
@@ -74,6 +76,7 @@ export default function AdminDashboard() {
       
       setFormTypes(typesData.formTypes || []);
       setAllDefinitions(definitions || []);
+      setNoticeBoard((noticeData as any)?.value || '');
       
       if (typesData.formTypes?.length > 0 && !activeFormId) {
         setActiveFormId(typesData.formTypes[0].id);
@@ -249,6 +252,18 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleSaveNoticeBoard = async () => {
+    setIsSaving(true);
+    try {
+      await apiPost('/api/settings', { key: 'NoticeBoard', value: noticeBoard });
+      alert('公告欄已更新');
+    } catch (error) {
+      alert('公告欄儲存失敗');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const currentSpec = allDefinitions.find(d => d.formId === activeFormId);
 
   return (
@@ -282,6 +297,28 @@ export default function AdminDashboard() {
         </div>
       ) : (
         <div className="animate-fade-in">
+          <div className="mb-8 rounded-3xl border border-amber-200 bg-amber-50/80 p-6 shadow-sm">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-amber-800">公佈欄管理</h3>
+                <p className="text-sm text-amber-700">內容會顯示在登入後的申請頁頂部，支援 Markdown。</p>
+              </div>
+              <button
+                onClick={handleSaveNoticeBoard}
+                disabled={isSaving}
+                className="rounded-xl bg-amber-600 px-5 py-2 font-bold text-white disabled:opacity-60"
+              >
+                {isSaving ? '儲存中...' : '儲存公告'}
+              </button>
+            </div>
+            <textarea
+              rows={6}
+              value={noticeBoard}
+              onChange={(e) => setNoticeBoard(e.target.value)}
+              className="form-input w-full font-mono text-sm"
+              placeholder={'**系統公告**\n- 請填寫最新公告'}
+            />
+          </div>
           
           {mainMode === 'A' ? (
             /* Option A UI */
