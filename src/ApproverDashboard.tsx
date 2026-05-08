@@ -23,8 +23,8 @@ interface Ticket {
   };
 }
 
-export default function ApproverDashboard() {
-  const [email, setEmail] = useState('');
+export default function ApproverDashboard({ initialEmail = '' }: { initialEmail?: string }) {
+  const [email, setEmail] = useState(initialEmail);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isFetching, setIsFetching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);

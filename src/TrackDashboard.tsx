@@ -128,8 +128,8 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
   );
 };
 
-export default function TrackDashboard() {
-  const [email, setEmail] = useState('');
+export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: string }) {
+  const [email, setEmail] = useState(initialEmail);
   const [tickets, setTickets] = useState<MyTicket[]>([]);
   const [isFetching, setIsFetching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);

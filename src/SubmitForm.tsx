@@ -4,8 +4,8 @@ import { apiGet, apiPost } from './lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-export default function SubmitForm() {
-  const [email, setEmail] = useState('');
+export default function SubmitForm({ initialEmail = '' }: { initialEmail?: string }) {
+  const [email, setEmail] = useState(initialEmail);
   const [user, setUser] = useState<{name: string; dept: string; manager: string; roles: string} | null>(null);
   const [isFetchingUser, setIsFetchingUser] = useState(false);
   const [userError, setUserError] = useState('');
@@ -19,6 +19,13 @@ export default function SubmitForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [generatedTicketId, setGeneratedTicketId] = useState('');
+
+  useEffect(() => {
+    if (initialEmail && initialEmail !== email) {
+      setEmail(initialEmail);
+      fetchUser(initialEmail);
+    }
+  }, [initialEmail]);
 
   useEffect(() => {
     Promise.all([

@@ -283,6 +283,7 @@ function createJsonResponse(data) {
 // 👉 請在 Google Apps Script 上方選單選擇此函式並按下「執行」，即可自動長出所有真實版的規則與表單設定！
 function setupRealData() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ticketHeaders = ["TicketID", "CreatedAt", "ApplicantEmail", "ApplicantName", "Department", "FormType", "Status", "CurrentStage", "SLA_Deadline", "Subject", "Amount", "NeedsAML", "FormData_JSON", "CurrentApprover", "AML_Result", "AML_Comment", "RP_Result", "RP_Comment"];
   
   var _checkAndCreate = function(name, headers) {
     var sheet = ss.getSheetByName(name);
@@ -290,12 +291,14 @@ function setupRealData() {
       sheet = ss.insertSheet(name);
       sheet.appendRow(headers);
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#d9ead3");
+    } else {
+      ensureSheetHeaders_(sheet, headers);
     }
     return sheet;
   };
   
   _checkAndCreate("Users", ["Email", "Name", "Department", "ManagerEmail", "Roles"]);
-  _checkAndCreate("Tickets", ["TicketID", "CreatedAt", "ApplicantEmail", "ApplicantName", "Department", "FormType", "Status", "CurrentStage", "SLA_Deadline", "Subject", "Amount", "NeedsAML", "FormData_JSON", "CurrentApprover", "AML_Result", "AML_Comment", "RP_Result", "RP_Comment"]);
+  _checkAndCreate("Tickets", ticketHeaders);
   var formsSheet = _checkAndCreate("FormTypes", ["FormID", "FormName"]);
   var rulesSheet = _checkAndCreate("WorkflowRules", ["RuleID", "FormType", "Stage", "ConditionField", "ConditionOp", "ConditionVal", "ApproverType", "ApproverValue"]);
   _checkAndCreate("AuditLogs", ["TicketID", "ActionType", "ApproverID", "Stage", "Comment", "Timestamp"]);
@@ -343,6 +346,31 @@ function setupRealData() {
     SpreadsheetApp.getUi().alert("成功匯入貴公司真實的【表單定義】與【簽核路徑規則表】，並建立了 AuditLogs 工作表！");
   } catch (e) {
     Logger.log("成功匯入貴公司真實的【表單定義】與【簽核路徑規則表】，並建立了 AuditLogs 工作表！");
+  }
+}
+
+function ensureSheetHeaders_(sheet, expectedHeaders) {
+  var existingLastColumn = Math.max(sheet.getLastColumn(), 1);
+  var existingHeaders = sheet.getRange(1, 1, 1, existingLastColumn).getValues()[0];
+  var normalizedExisting = existingHeaders.map(function(h) { return String(h || '').trim(); });
+
+  for (var i = 0; i < expectedHeaders.length; i++) {
+    var expected = expectedHeaders[i];
+    if (normalizedExisting[i] === expected) continue;
+
+    var foundIndex = normalizedExisting.indexOf(expected);
+    if (foundIndex !== -1) {
+      continue;
+    }
+
+    sheet.getRange(1, i + 1).setValue(expected);
+    normalizedExisting[i] = expected;
+  }
+
+  sheet.getRange(1, 1, 1, expectedHeaders.length).setFontWeight("bold").setBackground("#d9ead3");
+
+  if (normalizedExisting[12] === 'FormData') {
+    sheet.getRange(1, 13).setValue('FormData_JSON');
   }
 }
 
