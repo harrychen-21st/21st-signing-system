@@ -24,6 +24,43 @@
 - 未驗證：說明原因
 ```
 
+## 2026-05-08
+
+### 變更摘要
+- 完成前端主登入流程，登入後依角色隱藏無權限頁籤，避免非主管/非管理員看到不應操作的入口。
+- `SubmitForm.tsx` 補上公告欄顯示、多筆公告渲染能力，並將 AP/RD/CS 三種內建表單擴充為較接近正式流程的欄位組合。
+- `AdminDashboard.tsx` 新增公告欄管理，後續又重構為 A/B/C 三分頁，C 區塊專責多筆公告設定與發布時間維護。
+- `ApproverDashboard.tsx` 與 `TrackDashboard.tsx` 改為綁定主登入身份，不再允許在子頁面輸入另一個 email 當成第二組登入。
+- `TrackDashboard.tsx` 已接上申請紀錄與簽核歷程查詢 API；`ApproverDashboard.tsx` 已接上待簽核查詢與 AML / 關係人交易問卷畫面。
+- `server.ts` 補上登入 API、公告設定 API、單號前端預生成 + GAS 覆寫回傳、AML 後端阻擋邏輯、待簽核與我的申請查詢邏輯。
+- `apps-script-latest.js` 補上 `getSetting`、`saveSetting`、`login`、`getPendingTickets`、`getMyTickets` 與既有 `updateTicket` / `submitTickets` 擴充欄位支援。
+- `setupRealData()` 已補上既有 Sheet 表頭升級、公告預設資料、AML 測試規則與測試身份。
+- `setupRealData()` 的 Users 初始化已再改成 upsert 機制：不論 `Users` 是否已有資料，都會以 email 為鍵補上或更新測試身份與角色。
+- 已多次發布到 `main` / GitHub Pages，最近一次正式站已發布 commit 為 `ad86029`。
+- 目前工作區仍有**尚未發布**的本地修改：`apps-script-latest.js` 已改成 `upsertUsers_()`，但尚未 commit / push。
+
+### 影響檔案
+- `server.ts`
+- `apps-script-latest.js`
+- `src/App.tsx`
+- `src/SubmitForm.tsx`
+- `src/ApproverDashboard.tsx`
+- `src/TrackDashboard.tsx`
+- `src/AdminDashboard.tsx`
+- `src/lib/api.ts`
+- `WORKLOG.md`
+- `HANDOFF_STATUS.md`
+
+### 驗證
+- 已驗證：多輪 `npm run lint` 通過。
+- 已驗證：GitHub Pages 已可看到 build marker，最近正式站畫面曾顯示 `build: 5b28867` 與之後版本。
+- 已驗證：主登入、公佈欄、角色頁籤隱藏、管理頁公告欄管理 UI 已在正式站可見。
+- 未驗證：`apps-script-latest.js` 最新本地版（含 `upsertUsers_()`、`getPendingTickets`、`getMyTickets`）尚未再次發布到正式 Apps Script。
+- 未驗證：AML / 關係人交易特殊關卡是否已在正式環境完整跑通，仍待用 `test@company.com -> boss@company.com -> aml@company.com` 進行端到端測試。
+- 未驗證：主管待簽核查詢在正式站是否已使用最新 Apps Script action 回傳正確資料，需在 Apps Script 更新後重測。
+- 未驗證：申請紀錄查詢在正式站是否已使用最新 Apps Script action 回傳正確資料，需在 Apps Script 更新後重測。
+- 未驗證：公告欄 C 區塊多筆公告與發布時間設定，目前已完成本地程式修改，但尚未重新發布到 GitHub Pages。
+
 ## 2026-05-06
 
 ### 變更摘要

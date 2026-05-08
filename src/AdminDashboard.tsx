@@ -28,15 +28,14 @@ interface FormDefinition {
 }
 
 export default function AdminDashboard() {
-  // A: Existing Forms, B: New Form
-  const [mainMode, setMainMode] = useState<'A' | 'B'>('A');
+  const [mainMode, setMainMode] = useState<'A' | 'B' | 'C'>('A');
   
   const [formTypes, setFormTypes] = useState<FormType[]>([]);
   const [allDefinitions, setAllDefinitions] = useState<FormDefinition[]>([]);
   const [activeFormId, setActiveFormId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [noticeBoard, setNoticeBoard] = useState('');
+  const [notices, setNotices] = useState<Array<{ id: string; title: string; content: string; publishedAt: string }>>([]);
 
   // Edit Mode for Tab A
   const [isEditingSpecs, setIsEditingSpecs] = useState(false);
@@ -76,7 +75,12 @@ export default function AdminDashboard() {
       
       setFormTypes(typesData.formTypes || []);
       setAllDefinitions(definitions || []);
-      setNoticeBoard((noticeData as any)?.value || '');
+      try {
+        const parsed = JSON.parse((noticeData as any)?.value || '[]');
+        setNotices(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setNotices([]);
+      }
       
       if (typesData.formTypes?.length > 0 && !activeFormId) {
         setActiveFormId(typesData.formTypes[0].id);
@@ -255,13 +259,25 @@ export default function AdminDashboard() {
   const handleSaveNoticeBoard = async () => {
     setIsSaving(true);
     try {
-      await apiPost('/api/settings', { key: 'NoticeBoard', value: noticeBoard });
+      await apiPost('/api/settings', { key: 'NoticeBoard', value: JSON.stringify(notices) });
       alert('公告欄已更新');
     } catch (error) {
       alert('公告欄儲存失敗');
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleAddNotice = () => {
+    setNotices(prev => [{ id: `notice-${Date.now()}`, title: '新公告', content: '', publishedAt: new Date().toISOString() }, ...prev]);
+  };
+
+  const handleNoticeChange = (id: string, key: 'title' | 'content', value: string) => {
+    setNotices(prev => prev.map(notice => notice.id === id ? { ...notice, [key]: value } : notice));
+  };
+
+  const handleDeleteNotice = (id: string) => {
+    setNotices(prev => prev.filter(notice => notice.id !== id));
   };
 
   const currentSpec = allDefinitions.find(d => d.formId === activeFormId);
@@ -287,6 +303,12 @@ export default function AdminDashboard() {
           >
             <Plus size={18} /> B. 新增表單 (AI 建模)
           </button>
+          <button 
+            onClick={() => setMainMode('C')}
+            className={`flex items-center gap-2 px-8 py-3 rounded-2xl font-bold transition-all border-2 ${mainMode === 'C' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl scale-105' : 'bg-white text-slate-500 border-slate-100 hover:border-indigo-200'}`}
+          >
+            <AlertCircle size={18} /> C. 公告欄設定
+          </button>
         </div>
       </div>
 
@@ -297,29 +319,6 @@ export default function AdminDashboard() {
         </div>
       ) : (
         <div className="animate-fade-in">
-          <div className="mb-8 rounded-3xl border border-amber-200 bg-amber-50/80 p-6 shadow-sm">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-amber-800">公佈欄管理</h3>
-                <p className="text-sm text-amber-700">內容會顯示在登入後的申請頁頂部，支援 Markdown。</p>
-              </div>
-              <button
-                onClick={handleSaveNoticeBoard}
-                disabled={isSaving}
-                className="rounded-xl bg-amber-600 px-5 py-2 font-bold text-white disabled:opacity-60"
-              >
-                {isSaving ? '儲存中...' : '儲存公告'}
-              </button>
-            </div>
-            <textarea
-              rows={6}
-              value={noticeBoard}
-              onChange={(e) => setNoticeBoard(e.target.value)}
-              className="form-input w-full font-mono text-sm"
-              placeholder={'**系統公告**\n- 請填寫最新公告'}
-            />
-          </div>
-          
           {mainMode === 'A' ? (
             /* Option A UI */
             <div className="flex flex-col md:flex-row gap-8">
@@ -419,7 +418,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
             </div>
-          ) : (
+          ) : mainMode === 'B' ? (
             /* Option B UI: Focus on Creation */
             <div className="max-w-4xl mx-auto space-y-10 animate-slide-up">
                <div className="bg-white p-8 xs:p-12 rounded-[2.5rem] border border-slate-100 shadow-2xl relative overflow-hidden">
@@ -508,8 +507,33 @@ export default function AdminDashboard() {
                     <p className="text-center text-slate-400 font-bold text-sm tracking-wide">按下按鈕後，系統將自動配置 API 路由、資料庫欄位映射與簽核角色權限。</p>
                  </div>
                )}
+             </div>
+           ) : (
+            <div className="max-w-5xl mx-auto space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-800">公告欄設定</h3>
+                  <p className="text-sm text-slate-500">可設定多筆公告，發布時間會一併顯示在前台。</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={handleAddNotice} className="rounded-xl bg-slate-900 px-5 py-2 font-bold text-white">新增公告</button>
+                  <button onClick={handleSaveNoticeBoard} disabled={isSaving} className="rounded-xl bg-amber-600 px-5 py-2 font-bold text-white disabled:opacity-60">{isSaving ? '儲存中...' : '儲存全部公告'}</button>
+                </div>
+              </div>
+              <div className="space-y-4">
+                {notices.map((notice) => (
+                  <div key={notice.id} className="rounded-3xl border border-amber-200 bg-amber-50/70 p-6">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-xs font-mono text-slate-400">發布時間：{notice.publishedAt ? new Date(notice.publishedAt).toLocaleString() : ''}</div>
+                      <button onClick={() => handleDeleteNotice(notice.id)} className="rounded-lg bg-rose-100 px-3 py-1 text-sm font-bold text-rose-700">刪除</button>
+                    </div>
+                    <input value={notice.title} onChange={(e) => handleNoticeChange(notice.id, 'title', e.target.value)} className="form-input mb-3 w-full" placeholder="公告標題" />
+                    <textarea value={notice.content} onChange={(e) => handleNoticeChange(notice.id, 'content', e.target.value)} rows={6} className="form-input w-full font-mono text-sm" placeholder={'**系統公告**\n- 請填寫內容'} />
+                  </div>
+                ))}
+              </div>
             </div>
-          )}
+            )}
         </div>
       )}
     </div>

@@ -42,6 +42,12 @@ export default function ApproverDashboard({ initialEmail = '' }: { initialEmail?
     setEmail(initialEmail);
   }, [initialEmail]);
 
+  useEffect(() => {
+    if (initialEmail) {
+      fetchTickets();
+    }
+  }, [initialEmail]);
+
   const fetchTickets = async () => {
     const val = email.toLowerCase().trim();
     if (!val || !val.includes('@')) {
@@ -117,7 +123,7 @@ export default function ApproverDashboard({ initialEmail = '' }: { initialEmail?
             <CheckCircle className="text-emerald-500 w-8 h-8" /> 待簽核任務清單
           </h2>
           <p className="text-slate-500 text-sm md:text-base tracking-wide">
-            請輸入您的主管信箱，系統將自動撈取等待您簽核的單據
+            系統將依照目前登入身份，自動撈取等待您簽核的單據
           </p>
         </div>
 

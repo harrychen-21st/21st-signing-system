@@ -72,6 +72,83 @@ function doGet(e) {
       return createJsonResponse({ success: true, key: key, value: "" });
     }
 
+    if (action === 'getPendingTickets') {
+      var approverEmail = String(e.parameter.email || '').toLowerCase();
+      var pendingUsersSheet = ss.getSheetByName('Users');
+      var pendingTicketsSheet = ss.getSheetByName('Tickets');
+      if (!pendingUsersSheet || !pendingTicketsSheet) return createJsonResponse({ success: true, tickets: [] });
+
+      var pendingUsers = pendingUsersSheet.getDataRange().getValues();
+      var pendingUserRow = null;
+      for (var pu = 1; pu < pendingUsers.length; pu++) {
+        if (String(pendingUsers[pu][0] || '').toLowerCase() === approverEmail) {
+          pendingUserRow = pendingUsers[pu];
+          break;
+        }
+      }
+      var pendingRoles = pendingUserRow && pendingUserRow[4] ? String(pendingUserRow[4]).split(',').map(function(role) { return String(role).trim(); }).filter(Boolean) : [];
+
+      var pendingRows = pendingTicketsSheet.getDataRange().getValues();
+      var pendingTickets = [];
+      for (var pt = 1; pt < pendingRows.length; pt++) {
+        var ticketRow = pendingRows[pt];
+        if (ticketRow[6] !== 'Pending') continue;
+        if (isTicketForApprover_(ticketRow, pendingRoles, approverEmail)) {
+          pendingTickets.push({
+            id: ticketRow[0],
+            createdAt: ticketRow[1],
+            applicantEmail: ticketRow[2],
+            applicantName: ticketRow[3],
+            dept: ticketRow[4],
+            formType: ticketRow[5],
+            status: ticketRow[6],
+            stage: ticketRow[7],
+            subject: ticketRow[9],
+            amount: ticketRow[10],
+            currentApprover: ticketRow[13],
+            complianceRequired: ticketRow[11] === 'TRUE',
+            compliance: {
+              aml_result: ticketRow[14] || '',
+              aml_comment: ticketRow[15] || '',
+              rp_result: ticketRow[16] || '',
+              rp_comment: ticketRow[17] || ''
+            }
+          });
+        }
+      }
+      return createJsonResponse({ success: true, tickets: pendingTickets });
+    }
+
+    if (action === 'getMyTickets') {
+      var applicantEmail = String(e.parameter.email || '').toLowerCase();
+      var myTicketsSheet = ss.getSheetByName('Tickets');
+      var myUsersSheet = ss.getSheetByName('Users');
+      if (!myTicketsSheet || !myUsersSheet) return createJsonResponse({ success: true, tickets: [] });
+
+      var myTicketRows = myTicketsSheet.getDataRange().getValues();
+      var myUsers = myUsersSheet.getDataRange().getValues();
+      var myTickets = [];
+      for (var mt = 1; mt < myTicketRows.length; mt++) {
+        var myRow = myTicketRows[mt];
+        if (String(myRow[2] || '').toLowerCase() !== applicantEmail) continue;
+        myTickets.push({
+          id: myRow[0],
+          createdAt: myRow[1],
+          applicantEmail: myRow[2],
+          applicantName: myRow[3],
+          dept: myRow[4],
+          formType: myRow[5],
+          status: myRow[6],
+          stage: myRow[7],
+          subject: myRow[9],
+          amount: myRow[10],
+          formData: myRow[12] ? JSON.parse(myRow[12]) : {},
+          currentApprover: formatApproverDisplay_(String(myRow[13] || ''), myUsers)
+        });
+      }
+      return createJsonResponse({ success: true, tickets: myTickets });
+    }
+
     // 取得特定單據的簽核歷史紀錄
     if (action === 'getAuditLogs') {
       var ticketId = e.parameter.ticketId;
@@ -331,6 +408,8 @@ function setupRealData() {
   _checkAndCreate("AuditLogs", ["TicketID", "ActionType", "ApproverID", "Stage", "Comment", "Timestamp"]);
   _checkAndCreate("FormDefinitions", ["FormID", "FieldsMarkdown", "LogicMarkdown", "ConfigJSON"]);
   _checkAndCreate("SystemSettings", ["Key", "Value"]);
+  var usersSheet = ss.getSheetByName("Users");
+  var settingsSheet = ss.getSheetByName("SystemSettings");
 
   // 清空並寫入真實表單種類
   formsSheet.getRange(2, 1, formsSheet.getLastRow() || 2, 2).clearContent();
@@ -369,6 +448,21 @@ function setupRealData() {
   rulesSheet.getRange(2, 1, rulesSheet.getLastRow() || 2, 8).clearContent();
   rulesSheet.getRange(2, 1, ruleData.length, 8).setValues(ruleData);
 
+  upsertUsers_(usersSheet, [
+    ["test@company.com", "陳小明 (員工測試)", "MK 行銷企劃部", "boss@company.com", "ROLE:EMPLOYEE"],
+    ["boss@company.com", "李大方 (主管測試)", "GM 總經理室", "boss@company.com", "ROLE:DEPT_HEAD,ROLE:GM"],
+    ["admin@company.com", "王維運 (管理員)", "IT 資訊處", "boss@company.com", "ROLE:ADMIN"],
+    ["aml@company.com", "周合規 (AML審查)", "AD 管理處", "boss@company.com", "ROLE:ADMIN_HEAD"],
+    ["finance@company.com", "林會計 (財務)", "FN 財務處", "boss@company.com", "ROLE:FINANCE,ROLE:ADMIN_GM"]
+  ]);
+
+  if (settingsSheet.getLastRow() <= 1) {
+    settingsSheet.getRange(2, 1, 2, 2).setValues([
+      ["NoticeBoard", JSON.stringify([{ id: "notice-1", title: "申請流程公告", content: "請點擊文字了解申請流程", publishedAt: new Date().toISOString() }])],
+      ["NoticeBoardLegacy", "請點擊文字了解申請流程"]
+    ]);
+  }
+
   try {
     SpreadsheetApp.getUi().alert("成功匯入貴公司真實的【表單定義】與【簽核路徑規則表】，並建立了 AuditLogs 工作表！");
   } catch (e) {
@@ -398,6 +492,53 @@ function ensureSheetHeaders_(sheet, expectedHeaders) {
 
   if (normalizedExisting[12] === 'FormData') {
     sheet.getRange(1, 13).setValue('FormData_JSON');
+  }
+}
+
+function formatApproverDisplay_(approverStr, users) {
+  if (!approverStr) return '';
+  if (approverStr.indexOf('ROLE:') === 0) return approverStr;
+  for (var i = 1; i < users.length; i++) {
+    if (String(users[i][0] || '').toLowerCase() === approverStr.toLowerCase()) {
+      return String(users[i][1] || approverStr);
+    }
+  }
+  return approverStr;
+}
+
+function isTicketForApprover_(row, myRoles, email) {
+  var approver = String(row[13] || '');
+  var formData = row[12] ? JSON.parse(row[12]) : {};
+  var specialRole = formData.__specialApproverRole || 'ROLE:ADMIN_HEAD';
+  if (!approver) return false;
+  if (approver.toLowerCase() === email) return true;
+  if (myRoles.indexOf(approver) !== -1) return true;
+  if (approver === 'SPECIAL:AML_CHECK') return myRoles.indexOf(String(specialRole)) !== -1;
+  return false;
+}
+
+function upsertUsers_(sheet, users) {
+  var data = sheet.getDataRange().getValues();
+  var emailToRow = {};
+
+  for (var i = 1; i < data.length; i++) {
+    var existingEmail = String(data[i][0] || '').toLowerCase();
+    if (existingEmail) {
+      emailToRow[existingEmail] = i + 1;
+    }
+  }
+
+  for (var u = 0; u < users.length; u++) {
+    var user = users[u];
+    var email = String(user[0] || '').toLowerCase();
+    if (!email) continue;
+
+    if (emailToRow[email]) {
+      sheet.getRange(emailToRow[email], 1, 1, user.length).setValues([user]);
+    } else {
+      sheet.appendRow(user);
+      emailToRow[email] = sheet.getLastRow();
+    }
   }
 }
 

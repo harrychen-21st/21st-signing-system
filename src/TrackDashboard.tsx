@@ -141,6 +141,12 @@ export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: s
     setEmail(initialEmail);
   }, [initialEmail]);
 
+  useEffect(() => {
+    if (initialEmail) {
+      fetchTickets();
+    }
+  }, [initialEmail]);
+
   const handlePrint = (ticketId: string) => {
     setPrintingTicketId(ticketId);
     setTimeout(() => {
@@ -224,7 +230,7 @@ export default function TrackDashboard({ initialEmail = '' }: { initialEmail?: s
           <Activity className="text-amber-500 w-8 h-8" /> 我的申請單進度追蹤
         </h2>
         <p className="text-slate-500 text-sm md:text-base tracking-wide">
-          請輸入您的申請信箱，查看您所有送出單據目前的簽核狀態與歷程
+          系統將依照目前登入身份，查看您所有送出單據目前的簽核狀態與歷程
         </p>
       </div>
 

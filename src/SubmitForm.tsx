@@ -14,7 +14,7 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
   const [formTypesData, setFormTypesData] = useState<{id: string, name: string}[]>([]);
   const [formDefinitions, setFormDefinitions] = useState<any[]>([]);
   const [dynamicData, setDynamicData] = useState<Record<string, any>>({});
-  const [noticeBoard, setNoticeBoard] = useState('');
+  const [noticeBoard, setNoticeBoard] = useState<Array<{ id: string; title: string; content: string; publishedAt: string }>>([]);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
@@ -52,8 +52,15 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
   useEffect(() => {
     if (!user) return;
     apiGet<{ success: boolean; value: string }>('/api/settings/NoticeBoard', { action: 'getSetting', key: 'NoticeBoard' })
-      .then((data) => setNoticeBoard(data.value || ''))
-      .catch(() => setNoticeBoard(''));
+      .then((data) => {
+        try {
+          const parsed = JSON.parse(data.value || '[]');
+          setNoticeBoard(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          setNoticeBoard(data.value ? [{ id: 'legacy', title: '公告欄', content: data.value, publishedAt: '' }] : []);
+        }
+      })
+      .catch(() => setNoticeBoard([]));
   }, [user]);
 
   const currentDef = formDefinitions.find(d => d.formId === formType);
@@ -210,11 +217,21 @@ export default function SubmitForm({ initialEmail = '' }: { initialEmail?: strin
 
       {user && (
         <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in">
-          {noticeBoard && (
+          {noticeBoard.length > 0 && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-5 text-sm text-slate-700">
               <div className="mb-3 text-sm font-bold text-amber-700">公告欄</div>
-              <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-strong:text-slate-800 prose-a:text-amber-700">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{noticeBoard}</ReactMarkdown>
+              <div className="space-y-4">
+                {noticeBoard.map((notice) => (
+                  <div key={notice.id} className="rounded-xl border border-amber-100 bg-white/70 p-4">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="font-bold text-slate-800">{notice.title}</div>
+                      <div className="text-xs text-slate-400">{notice.publishedAt ? new Date(notice.publishedAt).toLocaleString() : ''}</div>
+                    </div>
+                    <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-strong:text-slate-800 prose-a:text-amber-700">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{notice.content}</ReactMarkdown>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
