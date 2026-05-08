@@ -210,6 +210,33 @@ function doPost(e) {
       return createJsonResponse({ success: true });
     }
 
+    if (action === 'login') {
+      var loginEmail = String(payload.email || '').toLowerCase();
+      if (!loginEmail) return createJsonResponse({ success: false, error: 'Missing email' });
+
+      var loginUserSheet = ss.getSheetByName('Users');
+      if (!loginUserSheet) return createJsonResponse({ success: false, error: 'Users sheet not found' });
+
+      var loginRows = loginUserSheet.getDataRange().getValues();
+      for (var lu = 1; lu < loginRows.length; lu++) {
+        if (String(loginRows[lu][0] || '').toLowerCase() === loginEmail) {
+          return createJsonResponse({
+            success: true,
+            user: {
+              email: loginRows[lu][0],
+              name: loginRows[lu][1],
+              dept: loginRows[lu][2],
+              manager: loginRows[lu][3],
+              roles: String(loginRows[lu][4] || '').split(',').map(function(role) { return String(role).trim(); }).filter(Boolean)
+            },
+            expiresInDays: 7
+          });
+        }
+      }
+
+      return createJsonResponse({ success: false, error: 'User not found' });
+    }
+
     if (action === 'updateTicketActionProxy') {
       return createJsonResponse({ success: false, error: 'GitHub Pages 直連模式下，簽核 action 仍需透過 Node server 的 /api/tickets/:ticketId/action 執行規則判斷。' });
     }

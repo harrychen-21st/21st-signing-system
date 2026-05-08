@@ -118,6 +118,13 @@ function toAppsScriptPayload(path: string, body: unknown): unknown {
     return mapSubmitApprovalPayload(data);
   }
 
+  if (path === '/api/auth/login') {
+    return {
+      action: 'login',
+      email: String(data.email || '').toLowerCase().trim(),
+    };
+  }
+
   if (path === '/api/settings') {
     return {
       action: 'saveSetting',
