@@ -59,11 +59,16 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
         body: JSON.stringify(body),
       });
 
+  const data = await parseJsonResponse<any>(res);
   if (!res.ok) {
-    throw new Error(`POST ${url} failed: ${res.status}`);
+    throw new Error(data?.error || `POST ${url} failed: ${res.status}`);
   }
 
-  return parseJsonResponse<T>(res);
+  if (data && typeof data === 'object' && data.success === false) {
+    throw new Error(data.error || 'Request failed');
+  }
+
+  return data as T;
 }
 
 async function parseJsonResponse<T>(res: Response): Promise<T> {
@@ -111,6 +116,23 @@ function toAppsScriptPayload(path: string, body: unknown): unknown {
 
   if (path === '/api/submit-approval') {
     return mapSubmitApprovalPayload(data);
+  }
+
+  if (path === '/api/settings') {
+    return {
+      action: 'saveSetting',
+      key: String(data.key || ''),
+      value: String(data.value || ''),
+    };
+  }
+
+  if (path.includes('/api/tickets/') && path.endsWith('/action')) {
+    const ticketId = decodeURIComponent(path.split('/')[3] || '');
+    return {
+      action: 'updateTicketActionProxy',
+      ticketId,
+      ...data,
+    };
   }
 
   return body;

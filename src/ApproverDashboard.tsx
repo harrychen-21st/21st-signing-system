@@ -13,6 +13,14 @@ interface Ticket {
   stage: string;
   subject: string;
   amount: string;
+  currentApprover?: string;
+  complianceRequired?: boolean;
+  compliance?: {
+    aml_result?: string;
+    aml_comment?: string;
+    rp_result?: string;
+    rp_comment?: string;
+  };
 }
 
 export default function ApproverDashboard() {
@@ -25,6 +33,10 @@ export default function ApproverDashboard() {
   // Modal states
   const [activeModal, setActiveModal] = useState<{ticket: Ticket, action: 'approve' | 'reject'} | null>(null);
   const [commentText, setCommentText] = useState('');
+  const [amlResult, setAmlResult] = useState('');
+  const [amlComment, setAmlComment] = useState('');
+  const [rpResult, setRpResult] = useState('');
+  const [rpComment, setRpComment] = useState('');
 
   const fetchTickets = async () => {
     const val = email.toLowerCase().trim();
@@ -36,8 +48,8 @@ export default function ApproverDashboard() {
     setIsFetching(true);
     setHasSearched(true);
     try {
-      setTickets([]);
-      alert('主管簽核區目前尚未完成 GitHub Pages 直連 Apps Script，需先補 Apps Script 的待簽核查詢 API。');
+      const data = await apiGet<{ tickets: Ticket[] }>(`/api/tickets/pending/${encodeURIComponent(val)}`);
+      setTickets(data.tickets || []);
     } catch (error) {
       console.error("Failed to fetch tickets", error);
       alert("無法取得簽核單，請稍後再試。");
@@ -49,20 +61,45 @@ export default function ApproverDashboard() {
   const openActionModal = (ticket: Ticket, action: 'approve' | 'reject') => {
     setActiveModal({ ticket, action });
     setCommentText('');
+    setAmlResult(ticket.compliance?.aml_result || '');
+    setAmlComment(ticket.compliance?.aml_comment || '');
+    setRpResult(ticket.compliance?.rp_result || '');
+    setRpComment(ticket.compliance?.rp_comment || '');
   };
 
   const confirmAction = async () => {
     if (!activeModal) return;
     const { ticket, action } = activeModal;
+
+    if (ticket.complianceRequired && !amlResult) {
+      alert('請填寫 AML 盡職調查結果。');
+      return;
+    }
+
+    if (ticket.complianceRequired && !rpResult) {
+      alert('請填寫關係人交易調查結果。');
+      return;
+    }
     
     setActionLoading(ticket.id);
     setActiveModal(null); // Close modal right away
 
     try {
-      alert('主管簽核送出功能目前尚未完成 GitHub Pages 直連 Apps Script。');
+      await apiPost(`/api/tickets/${encodeURIComponent(ticket.id)}/action`, {
+        action,
+        approverEmail: email.toLowerCase().trim(),
+        comment: commentText,
+        compliance: ticket.complianceRequired ? {
+          aml_result: amlResult,
+          aml_comment: amlComment,
+          rp_result: rpResult,
+          rp_comment: rpComment,
+        } : undefined,
+      });
+      await fetchTickets();
     } catch (error) {
       console.error("Action error", error);
-      alert("操作失敗，請稍後再試。");
+      alert(error instanceof Error ? error.message : '操作失敗，請稍後再試。');
     } finally {
       setActionLoading(null);
     }
@@ -202,6 +239,39 @@ export default function ApproverDashboard() {
                 }`}
               />
             </div>
+
+            {activeModal.ticket.complianceRequired && (
+              <div className="mb-6 space-y-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-bold text-amber-700">
+                  <AlertCircle className="w-4 h-4" /> AML / 關係人交易審查
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">AML 盡職調查結果</label>
+                  <select value={amlResult} onChange={(e) => setAmlResult(e.target.value)} className="form-input">
+                    <option value="">請選擇</option>
+                    <option value="正常">正常</option>
+                    <option value="不正常">不正常</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">AML 備註</label>
+                  <textarea rows={3} value={amlComment} onChange={(e) => setAmlComment(e.target.value)} className="form-input" />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">關係人交易調查結果</label>
+                  <select value={rpResult} onChange={(e) => setRpResult(e.target.value)} className="form-input">
+                    <option value="">請選擇</option>
+                    <option value="非關係人交易">非關係人交易</option>
+                    <option value="關係人交易且已經過董事會同意">關係人交易且已經過董事會同意</option>
+                    <option value="關係人交易但未經過董事會同意">關係人交易但未經過董事會同意</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">關係人交易備註</label>
+                  <textarea rows={3} value={rpComment} onChange={(e) => setRpComment(e.target.value)} className="form-input" />
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-3">
               <button 

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Briefcase, User, Send, Loader2, FileSignature, CheckCircle, Upload, XCircle } from 'lucide-react';
 import { apiGet, apiPost } from './lib/api';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function SubmitForm() {
   const [email, setEmail] = useState('');
@@ -12,6 +14,7 @@ export default function SubmitForm() {
   const [formTypesData, setFormTypesData] = useState<{id: string, name: string}[]>([]);
   const [formDefinitions, setFormDefinitions] = useState<any[]>([]);
   const [dynamicData, setDynamicData] = useState<Record<string, any>>({});
+  const [noticeBoard, setNoticeBoard] = useState('');
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
@@ -38,6 +41,13 @@ export default function SubmitForm() {
       setFormDefinitions(definitions || []);
     });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    apiGet<{ success: boolean; value: string }>('/api/settings/NoticeBoard', { action: 'getSetting', key: 'NoticeBoard' })
+      .then((data) => setNoticeBoard(data.value || ''))
+      .catch(() => setNoticeBoard(''));
+  }, [user]);
 
   const currentDef = formDefinitions.find(d => d.formId === formType);
 
@@ -103,8 +113,10 @@ export default function SubmitForm() {
     
     const today = new Date();
     const yyyymmdd = today.toISOString().split('T')[0].replace(/-/g, '');
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000).toString();
-    const ticketId = `${formType}-${yyyymmdd}-${randomSuffix}`;
+    const deptCodeMatch = user.dept.match(/^([A-Za-z0-9]+)/);
+    const deptCode = (deptCodeMatch?.[1] || 'GEN').toUpperCase();
+    const randomSuffix = Math.random().toString(36).slice(2, 6);
+    const ticketId = `${formType}${deptCode}${yyyymmdd}${randomSuffix}`;
     
     let subject = '';
     let amount = '';
@@ -131,7 +143,7 @@ export default function SubmitForm() {
     }
 
     try {
-        await apiPost('/api/submit-approval', {
+        const result = await apiPost<{ success: boolean; generatedIds?: string[] }>('/api/submit-approval', {
             applicantEmail: email,
             applicantName: user.name,
             department: user.dept,
@@ -140,7 +152,7 @@ export default function SubmitForm() {
             ]
         });
         setSubmitSuccess(true);
-        setGeneratedTicketId(ticketId);
+        setGeneratedTicketId(result.generatedIds?.[0] || ticketId);
     } catch (error) {
         console.error("Error submitting form", error);
         alert(`送出失敗: ${error instanceof Error ? error.message : '未知錯誤'}`);
@@ -189,6 +201,15 @@ export default function SubmitForm() {
 
       {user && (
         <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in">
+          {noticeBoard && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-5 text-sm text-slate-700">
+              <div className="mb-3 text-sm font-bold text-amber-700">公告欄</div>
+              <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-strong:text-slate-800 prose-a:text-amber-700">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{noticeBoard}</ReactMarkdown>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-2xl flex items-center gap-4">
               <User className="text-emerald-500" />

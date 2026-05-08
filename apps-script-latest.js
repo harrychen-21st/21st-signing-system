@@ -59,6 +59,19 @@ function doGet(e) {
       return createJsonResponse({ success: true, data: formSheet.getDataRange().getValues() });
     }
 
+    if (action === 'getSetting') {
+      var key = e.parameter.key;
+      var settingsSheet = ss.getSheetByName("SystemSettings");
+      if (!settingsSheet) return createJsonResponse({ success: true, key: key, value: "" });
+      var settingsData = settingsSheet.getDataRange().getValues();
+      for (var s = 1; s < settingsData.length; s++) {
+        if (String(settingsData[s][0]) === String(key)) {
+          return createJsonResponse({ success: true, key: key, value: settingsData[s][1] || "" });
+        }
+      }
+      return createJsonResponse({ success: true, key: key, value: "" });
+    }
+
     // 取得特定單據的簽核歷史紀錄
     if (action === 'getAuditLogs') {
       var ticketId = e.parameter.ticketId;
@@ -104,7 +117,12 @@ function doPost(e) {
       var logSheet = ss.getSheetByName("AuditLogs");
       if (!sheet) return createJsonResponse({ success: false, error: "Tickets sheet not found" });
       var rows = payload.rows;
+      var generatedIds = [];
       if (rows && rows.length > 0) {
+        for (var r = 0; r < rows.length; r++) {
+          rows[r][0] = generateTicketNumber_(sheet, rows[r][5], rows[r][4], rows[r][0]);
+          generatedIds.push(rows[r][0]);
+        }
         sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
         
         // 寫入申請軌跡
@@ -113,7 +131,7 @@ function doPost(e) {
           logSheet.getRange(logSheet.getLastRow() + 1, 1, logs.length, logs[0].length).setValues(logs);
         }
       }
-      return createJsonResponse({ success: true });
+      return createJsonResponse({ success: true, generatedIds: generatedIds });
     }
 
     // 2. 儲存規則
@@ -168,6 +186,34 @@ function doPost(e) {
       return createJsonResponse({ success: true });
     }
 
+    if (action === 'saveSetting') {
+      var settingsKey = payload.key;
+      var settingsValue = payload.value;
+      var settingsSheet = ss.getSheetByName("SystemSettings");
+      if (!settingsSheet) return createJsonResponse({ success: false, error: "SystemSettings sheet not found" });
+
+      var settingsRows = settingsSheet.getDataRange().getValues();
+      var settingsRowIndex = -1;
+      for (var sr = 1; sr < settingsRows.length; sr++) {
+        if (String(settingsRows[sr][0]) === String(settingsKey)) {
+          settingsRowIndex = sr + 1;
+          break;
+        }
+      }
+
+      if (settingsRowIndex !== -1) {
+        settingsSheet.getRange(settingsRowIndex, 1, 1, 2).setValues([[settingsKey, settingsValue]]);
+      } else {
+        settingsSheet.appendRow([settingsKey, settingsValue]);
+      }
+
+      return createJsonResponse({ success: true });
+    }
+
+    if (action === 'updateTicketActionProxy') {
+      return createJsonResponse({ success: false, error: 'GitHub Pages 直連模式下，簽核 action 仍需透過 Node server 的 /api/tickets/:ticketId/action 執行規則判斷。' });
+    }
+
     // 4. 更新單據狀態 (主管核准/駁回) 並寫入歷史紀錄
     if (action === 'updateTicket') {
       var ticketId = payload.ticketId;
@@ -177,6 +223,7 @@ function doPost(e) {
       var comment = payload.comment; 
       var actionType = payload.actionType; // 'approve' or 'reject'
       var approverEmail = payload.approverEmail;
+      var compliance = payload.compliance || null;
       
       var sheet = ss.getSheetByName("Tickets");
       var logSheet = ss.getSheetByName("AuditLogs");
@@ -199,6 +246,12 @@ function doPost(e) {
       sheet.getRange(rowIndex, 7).setValue(newStatus);
       sheet.getRange(rowIndex, 8).setValue(newStage);
       sheet.getRange(rowIndex, 14).setValue(nextApprover);
+      if (compliance) {
+        sheet.getRange(rowIndex, 15).setValue(compliance.aml_result || '');
+        sheet.getRange(rowIndex, 16).setValue(compliance.aml_comment || '');
+        sheet.getRange(rowIndex, 17).setValue(compliance.rp_result || '');
+        sheet.getRange(rowIndex, 18).setValue(compliance.rp_comment || '');
+      }
 
       // 寫入 Log
       if (logSheet) {
@@ -242,11 +295,12 @@ function setupRealData() {
   };
   
   _checkAndCreate("Users", ["Email", "Name", "Department", "ManagerEmail", "Roles"]);
-  _checkAndCreate("Tickets", ["TicketID", "CreatedAt", "ApplicantEmail", "ApplicantName", "Department", "FormType", "Status", "CurrentStage", "SLA_Deadline", "Subject", "Amount", "NeedsAML", "FormData_JSON", "CurrentApprover"]);
+  _checkAndCreate("Tickets", ["TicketID", "CreatedAt", "ApplicantEmail", "ApplicantName", "Department", "FormType", "Status", "CurrentStage", "SLA_Deadline", "Subject", "Amount", "NeedsAML", "FormData_JSON", "CurrentApprover", "AML_Result", "AML_Comment", "RP_Result", "RP_Comment"]);
   var formsSheet = _checkAndCreate("FormTypes", ["FormID", "FormName"]);
   var rulesSheet = _checkAndCreate("WorkflowRules", ["RuleID", "FormType", "Stage", "ConditionField", "ConditionOp", "ConditionVal", "ApproverType", "ApproverValue"]);
   _checkAndCreate("AuditLogs", ["TicketID", "ActionType", "ApproverID", "Stage", "Comment", "Timestamp"]);
   _checkAndCreate("FormDefinitions", ["FormID", "FieldsMarkdown", "LogicMarkdown", "ConfigJSON"]);
+  _checkAndCreate("SystemSettings", ["Key", "Value"]);
 
   // 清空並寫入真實表單種類
   formsSheet.getRange(2, 1, formsSheet.getLastRow() || 2, 2).clearContent();
@@ -262,7 +316,7 @@ function setupRealData() {
     // [RuleID, FormType, Stage, ConditionField, ConditionOp, ConditionVal, ApproverType, ApproverValue]
     ["AP_1", "AP", 1, "ALWAYS", "TRUE", "", "MANAGER", ""], // 直屬主管
     ["AP_2", "AP", 2, "ALWAYS", "TRUE", "", "ROLE", "ROLE:DEPT_HEAD"], // 本部部長
-    ["AP_3", "AP", 3, "external_collab", "==", "true", "ROLE", "ROLE:ADMIN_HEAD"], // 管理處處長 (需 AML)
+    ["AP_3", "AP", 3, "external_collab", "==", "true", "SPECIAL:AML_CHECK", "ROLE:ADMIN_HEAD"], // 管理處處長 (需 AML)
     ["AP_4", "AP", 4, "ALWAYS", "TRUE", "", "ROLE", "ROLE:ADMIN_GM"], // 管理本部長
     ["AP_5", "AP", 5, "ALWAYS", "TRUE", "", "ROLE", "ROLE:GM"], // 總經理
     
@@ -285,5 +339,28 @@ function setupRealData() {
   rulesSheet.getRange(2, 1, rulesSheet.getLastRow() || 2, 8).clearContent();
   rulesSheet.getRange(2, 1, ruleData.length, 8).setValues(ruleData);
 
-  SpreadsheetApp.getUi().alert("成功匯入貴公司真實的【表單定義】與【簽核路徑規則表】，並建立了 AuditLogs 工作表！");
+  try {
+    SpreadsheetApp.getUi().alert("成功匯入貴公司真實的【表單定義】與【簽核路徑規則表】，並建立了 AuditLogs 工作表！");
+  } catch (e) {
+    Logger.log("成功匯入貴公司真實的【表單定義】與【簽核路徑規則表】，並建立了 AuditLogs 工作表！");
+  }
+}
+
+function generateTicketNumber_(sheet, formType, department, fallbackId) {
+  if (fallbackId && String(fallbackId).length >= 10) return fallbackId;
+
+  var deptMatch = String(department || '').match(/^([A-Za-z0-9]+)/);
+  var deptCode = deptMatch ? deptMatch[1].toUpperCase() : 'GEN';
+  var now = new Date();
+  var yyyymmdd = Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyyMMdd');
+  return String(formType || 'AP').toUpperCase() + deptCode + yyyymmdd + randomSuffix_();
+}
+
+function randomSuffix_() {
+  var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  var suffix = '';
+  for (var i = 0; i < 4; i++) {
+    suffix += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return suffix;
 }

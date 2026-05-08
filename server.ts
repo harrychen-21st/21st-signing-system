@@ -2,11 +2,148 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 
+type SheetRow = any[];
+
+type AuthUser = {
+  email: string;
+  name: string;
+  dept: string;
+  manager: string;
+  roles: string[];
+};
+
+type CompliancePayload = {
+  aml_result?: string;
+  aml_comment?: string;
+  rp_result?: string;
+  rp_comment?: string;
+};
+
+const NOTICE_BOARD_KEY = "NoticeBoard";
+const AML_SPECIAL_ROLE = "SPECIAL:AML_CHECK";
+
+const DEMO_USERS: Record<string, AuthUser> = {
+  "test@company.com": {
+    email: "test@company.com",
+    name: "陳小明 (Ming Chen)",
+    dept: "MK (行銷企劃部)",
+    manager: "boss@company.com",
+    roles: ["ROLE:EMPLOYEE"],
+  },
+  "boss@company.com": {
+    email: "boss@company.com",
+    name: "李大方 (David Lee)",
+    dept: "GM (總經理室)",
+    manager: "boss@company.com",
+    roles: ["ROLE:DEPT_HEAD", "ROLE:GM"],
+  },
+  "admin@company.com": {
+    email: "admin@company.com",
+    name: "王維運 (Admin)",
+    dept: "IT (資訊處)",
+    manager: "boss@company.com",
+    roles: ["ROLE:ADMIN"],
+  },
+};
+
+function parseRoles(value: unknown): string[] {
+  return String(value || "")
+    .split(",")
+    .map((role) => role.trim())
+    .filter(Boolean);
+}
+
+function normalizeUserFromRow(row: SheetRow | undefined): AuthUser | null {
+  if (!row || !row[0]) return null;
+  return {
+    email: String(row[0]).toLowerCase(),
+    name: String(row[1] || ""),
+    dept: String(row[2] || ""),
+    manager: String(row[3] || ""),
+    roles: parseRoles(row[4]),
+  };
+}
+
+function createMockToken(user: AuthUser) {
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  return Buffer.from(JSON.stringify({ ...user, expiresAt }), "utf8").toString("base64url");
+}
+
+function deriveDeptCode(department: string) {
+  const match = department.match(/^([A-Za-z0-9]+)/);
+  return (match?.[1] || "GEN").toUpperCase();
+}
+
+function buildTicketId(formType: string, department: string) {
+  const yyyymmdd = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const randomSeq = Math.random().toString(36).slice(2, 6);
+  return `${String(formType || "AP").toUpperCase()}${deriveDeptCode(department)}${yyyymmdd}${randomSeq}`;
+}
+
+function isAmlCheckStage(rules: SheetRow[], formType: string, stage: number) {
+  return rules.some(
+    (rule) =>
+      rule[1] === formType && Number(rule[2]) === stage && String(rule[6] || "") === AML_SPECIAL_ROLE,
+  );
+}
+
+function blocksApprovalByCompliance(compliance: CompliancePayload) {
+  return (
+    compliance.aml_result === "不正常" ||
+    compliance.rp_result === "關係人交易但未經過董事會同意"
+  );
+}
+
+function getNoticeBoardFallback() {
+  return "";
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
+
+  app.post("/api/auth/login", async (req, res) => {
+    const email = String(req.body?.email || "").toLowerCase().trim();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ success: false, error: "Invalid email" });
+    }
+
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+
+    if (!scriptUrl) {
+      const mockUser = DEMO_USERS[email] || {
+        email,
+        name: "預設測試員 (Test Role)",
+        dept: "CS (客服處)",
+        manager: "",
+        roles: ["ROLE:EMPLOYEE"],
+      };
+      return res.json({ success: true, token: createMockToken(mockUser), user: mockUser, expiresInDays: 7, source: "mock" });
+    }
+
+    try {
+      const response = await fetch(`${scriptUrl}?action=getUser&email=${encodeURIComponent(email)}`);
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.user) {
+        return res.status(401).json({ success: false, error: data.error || "User not found" });
+      }
+
+      const user: AuthUser = {
+        email,
+        name: String(data.user.name || ""),
+        dept: String(data.user.dept || ""),
+        manager: String(data.user.manager || ""),
+        roles: parseRoles(data.user.roles),
+      };
+
+      res.json({ success: true, token: createMockToken(user), user, expiresInDays: 7, source: "sheets" });
+    } catch (error: any) {
+      console.error("Error during login:", error);
+      res.status(500).json({ success: false, error: "Failed to authenticate user" });
+    }
+  });
 
   // ============================================================================
   // API Routes (Using Google Apps Script Web App as the database interface)
@@ -53,6 +190,56 @@ async function startServer() {
       console.error("Error fetching users from Apps Script:", error);
       // Fallback to mock data on error
       return res.json({ success: false, error: 'Failed to connect to directory' });
+    }
+  });
+
+  app.get("/api/settings/:key", async (req, res) => {
+    const { key } = req.params;
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+
+    if (!scriptUrl) {
+      return res.json({ success: true, key, value: key === NOTICE_BOARD_KEY ? getNoticeBoardFallback() : "", source: "mock" });
+    }
+
+    try {
+      const response = await fetch(`${scriptUrl}?action=getSetting&key=${encodeURIComponent(key)}`);
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to fetch setting");
+      }
+      res.json({ success: true, key, value: data.value || "", source: "sheets" });
+    } catch (error: any) {
+      console.error("Error fetching setting:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to fetch setting" });
+    }
+  });
+
+  app.post("/api/settings", async (req, res) => {
+    const { key, value } = req.body || {};
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+
+    if (!key) {
+      return res.status(400).json({ success: false, error: "Missing key" });
+    }
+
+    if (!scriptUrl) {
+      return res.json({ success: true, source: "mock" });
+    }
+
+    try {
+      const response = await fetch(scriptUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "saveSetting", key, value: String(value || "") }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to save setting");
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error saving setting:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to save setting" });
     }
   });
 
@@ -248,8 +435,11 @@ async function startServer() {
         // 使用動態規則引擎，決定第一關的簽核者 (currentStage 傳入 0 代表從頭開始評估下一關 = 1)
         const next = evaluateDynamicRules(allRules, 0, formData, formType, applicantEmail, allUsers);
 
+        const provisionalId = id || buildTicketId(formType, department);
+        const needsAml = next.approver === AML_SPECIAL_ROLE ? "TRUE" : "FALSE";
+
         return [
-          id,                                // A: 單號 (TicketID)
+          provisionalId,                     // A: 單號 (TicketID)
           createdAt.toISOString(),           // B: 建立時間 (CreatedAt)
           applicantEmail,                    // C: 申請人信箱 (ApplicantEmail)
           applicantName,                     // D: 申請人姓名 (ApplicantName)
@@ -260,9 +450,13 @@ async function startServer() {
           slaDeadline.toISOString(),         // I: 作廢死線 (SLA_Deadline)
           subject || '',                     // J: 主旨/事由 (Subject)
           amount || '',                      // K: 金額 (Amount)
-          "FALSE",                           // L: 需AML查核 (Legacy, keep string for now)
+          needsAml,                          // L: 需AML查核
           JSON.stringify(formData),          // M: 完整動態資料 (FormData JSON)
-          next.approver                      // N: 目前簽核者 (CurrentApprover)
+          next.approver,                     // N: 目前簽核者 (CurrentApprover)
+          "",                               // O: AML結果
+          "",                               // P: AML備註
+          "",                               // Q: 關係人交易結果
+          ""                                // R: 關係人交易備註
         ];
       });
 
@@ -294,7 +488,9 @@ async function startServer() {
       if (!response.ok) throw new Error(`Apps Script returned status: ${response.status}`);
       if (!result.success) throw new Error(result.error || "Unknown error from Apps Script");
 
-      const generatedIds = tickets.map((t: any) => t.id);
+      const generatedIds = Array.isArray(result.generatedIds) && result.generatedIds.length === tickets.length
+        ? result.generatedIds
+        : rows.map((row: any[]) => row[0]);
       res.json({ success: true, generatedIds });
     } catch (error: any) {
       console.error("Error submitting to Apps Script:", error);
@@ -349,7 +545,15 @@ async function startServer() {
         status: row[6],
         stage: row[7],
         subject: row[9],
-        amount: row[10]
+        amount: row[10],
+        currentApprover: row[13],
+        complianceRequired: row[11] === 'TRUE' || isAmlCheckStage(ticketsRows, row[5], Number(row[7])),
+        compliance: {
+          aml_result: row[14] || '',
+          aml_comment: row[15] || '',
+          rp_result: row[16] || '',
+          rp_comment: row[17] || ''
+        }
       }));
 
       if (pendingTickets.length === 0) {
@@ -452,7 +656,7 @@ async function startServer() {
   // 4. Approve/Reject Ticket (Dynamic Rule Engine Integration)
   app.post("/api/tickets/:ticketId/action", async (req, res) => {
     const { ticketId } = req.params;
-    const { action, approverEmail, comment } = req.body; // action: 'approve' | 'reject'
+    const { action, approverEmail, comment, compliance } = req.body as { action: 'approve' | 'reject'; approverEmail: string; comment?: string; compliance?: CompliancePayload };
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
 
     if (ticketId.startsWith('DEMO-')) {
@@ -482,6 +686,19 @@ async function startServer() {
       const currentStage = Number(ticketRow[7]);
       const formData = JSON.parse(ticketRow[12] || '{}');
       const applicantEmail = ticketRow[2];
+      const currentApprover = String(ticketRow[13] || '');
+      const allRules = rulesData.data || [];
+      const allUsers = usersData.data || [];
+      const requiresCompliance = currentApprover === AML_SPECIAL_ROLE || isAmlCheckStage(allRules, formType, currentStage);
+
+      if (action === 'approve' && requiresCompliance) {
+        if (!compliance?.aml_result || !compliance?.rp_result) {
+          return res.status(400).json({ error: 'AML 與關係人交易審查結果為必填。' });
+        }
+        if (blocksApprovalByCompliance(compliance)) {
+          return res.status(400).json({ error: '此單據未通過 AML 或關係人交易審查，只能進行駁回操作。' });
+        }
+      }
 
       let newStatus = 'Pending';
       let newStage: string | number = currentStage;
@@ -494,9 +711,6 @@ async function startServer() {
         newApprover = applicantEmail;
       } else {
         // 核准：【使用動態規則引擎決定下一關】
-        const allRules = rulesData.data || [];
-        const allUsers = usersData.data || [];
-        
         // Dynamic Rule Evaluation with skip logic included
         const next = evaluateDynamicRules(allRules, currentStage, formData, formType, applicantEmail, allUsers);
         
@@ -523,7 +737,13 @@ async function startServer() {
           nextApprover: newApprover,
           approverEmail,
           actionType: action,
-          comment
+          comment,
+          compliance: requiresCompliance ? {
+            aml_result: compliance?.aml_result || '',
+            aml_comment: compliance?.aml_comment || '',
+            rp_result: compliance?.rp_result || '',
+            rp_comment: compliance?.rp_comment || ''
+          } : null
         })
       });
 
