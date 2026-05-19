@@ -3,9 +3,10 @@
 ## Current Deployment
 - GitHub Pages URL: `https://harrychen-21st.github.io/21st-signing-system/`
 - Apps Script Web App: `https://script.google.com/macros/s/AKfycbxPxIPLrvil9a4x6YCPlML1gvrvxHzBLyCkGMRkU3YhVa8tYsiiErqLvUdNom073_C_ag/exec`
+- Target Spreadsheet ID: `1tdre3SGLFLXvl0932W2GfkXMJqtRAbZ2LpU7dVUcKdI`
 - Current branch: `main`
 - Latest GitHub Pages commit already pushed: `ad86029`
-- Local unpushed change exists: `apps-script-latest.js` updated with `upsertUsers_()` for test-role provisioning
+- Local unpushed change exists: `apps-script-latest.js` updated with `upsertUsers_()` for test-role provisioning and fixed Spreadsheet binding via `SPREADSHEET_ID`
 
 ## What Is Already Done
 - GitHub Pages workflow is in `.github/workflows/deploy-pages.yml`
@@ -23,6 +24,7 @@
 - GitHub Pages deployment itself is working
 - The live site can render UI
 - User lookup works on the live site
+- Apps Script now supports binding to a fixed spreadsheet via script property `SPREADSHEET_ID`; this should be set to the target spreadsheet ID above before running `setupRealData()` on a standalone deployment
 - Submit form type loading and submit flow have basic live validation, but AML-specific end-to-end flow still needs full verification
 - The live site currently lags behind the latest local Apps Script support changes if `apps-script-latest.js` has not been redeployed
 - Track dashboard and approver dashboard now call real data paths, but require latest Apps Script actions (`getMyTickets`, `getPendingTickets`) to be deployed
@@ -37,12 +39,14 @@
 1. Pull latest `main`
 2. Open `WORKLOG.md`
 3. Open `HANDOFF_STATUS.md`
-4. Check `git status` immediately after pull: if local change is missing, confirm whether `apps-script-latest.js` upsert logic was committed yet
+4. Check `git status` immediately after pull: if local change is missing, confirm whether `apps-script-latest.js` spreadsheet-binding fix was committed yet
 5. Check GitHub Actions Pages deployment result
 6. Open the live site and confirm the visible `build: <hash>` value matches the latest pushed commit
-7. Redeploy Google Apps Script using the current `apps-script-latest.js`
-8. Run `setupRealData()` again after redeploy
-9. Re-test:
+7. In Apps Script, run `setSpreadsheetId('1tdre3SGLFLXvl0932W2GfkXMJqtRAbZ2LpU7dVUcKdI')`
+8. Redeploy Google Apps Script using the current `apps-script-latest.js`
+9. Run `setupRealData()` again after redeploy
+10. Open `.../exec?action=healthcheck` and confirm the returned spreadsheet ID matches `1tdre3SGLFLXvl0932W2GfkXMJqtRAbZ2LpU7dVUcKdI`
+11. Re-test:
    - login
    - role-based tab visibility
    - notice board rendering
