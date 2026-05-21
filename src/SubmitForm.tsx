@@ -1,171 +1,149 @@
-import React, { useEffect, useState } from 'react';
-import { Briefcase, User, FileSignature, CheckCircle } from 'lucide-react';
-import { apiGet, apiPost } from './lib/api';
+import React, { useState, useEffect } from 'react';
+import { Mail, Briefcase, User, Send, Loader2, FileSignature, CheckCircle, Upload, XCircle, Megaphone } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { SessionUser } from './lib/session';
 
-export default function SubmitForm({ sessionUser }: { sessionUser: SessionUser | null }) {
-  const [formType, setFormType] = useState('AP');
-  const [formTypesData, setFormTypesData] = useState<{ id: string; name: string }[]>([]);
+import { authFetch } from './authFetch';
+
+export default function SubmitForm({ user }: { user: any }) {
+  const [formType, setFormType] = useState('AP'); 
+  const [formTypesData, setFormTypesData] = useState<{id: string, name: string}[]>([]);
   const [formDefinitions, setFormDefinitions] = useState<any[]>([]);
   const [dynamicData, setDynamicData] = useState<Record<string, any>>({});
-  const [noticeBoard, setNoticeBoard] = useState<Array<{ id: string; title: string; content: string; publishedAt: string }>>([]);
-
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [generatedTicketId, setGeneratedTicketId] = useState('');
+  const [noticeBoard, setNoticeBoard] = useState('');
 
-  const [apExternal, setApExternal] = useState(false);
-  const [apExtName, setApExtName] = useState('');
-  const [apExtOwner, setApExtOwner] = useState('');
-  const [apExtTaxId, setApExtTaxId] = useState('');
-  const [apSubject, setApSubject] = useState('');
-  const [apDesc, setApDesc] = useState('');
-  const [apAmount, setApAmount] = useState('');
-
-  const [rdRefId, setRdRefId] = useState('');
-  const [rdExpenseType, setRdExpenseType] = useState('代墊費用');
-  const [rdAmount, setRdAmount] = useState('');
-  const [rdPayMethod, setRdPayMethod] = useState('');
-  const [rdDesc, setRdDesc] = useState('');
-  const [rdFileCount, setRdFileCount] = useState(0);
-  const [rdVendor, setRdVendor] = useState('');
-  const [rdBoardApproved, setRdBoardApproved] = useState('NA');
-
-  const [csRefId, setCsRefId] = useState('');
-  const [csSealType, setCsSealType] = useState('經濟部章');
-  const [csDesc, setCsDesc] = useState('');
-  const [csExternalParty, setCsExternalParty] = useState('');
+  const [ubnLoading, setUbnLoading] = useState(false);
+  const [ubnSuccess, setUbnSuccess] = useState(false);
 
   useEffect(() => {
     Promise.all([
-      apiGet<{ formTypes: { id: string; name: string }[] }>('/api/form-types', { action: 'getFormTypes' }),
-      apiGet<any>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' })
-    ]).then(([typesData, defsData]) => {
+      authFetch('/api/form-types').then(res => res.json()),
+      authFetch('/api/form-definitions').then(res => res.json()),
+      authFetch('/api/settings/NoticeBoard').then(res => res.json()).catch(() => ({ value: '' }))
+    ]).then(([typesData, defsData, noticeData]) => {
       if (typesData.formTypes && typesData.formTypes.length > 0) {
         setFormTypesData(typesData.formTypes);
         setFormType(typesData.formTypes[0].id);
       }
-      const rows = defsData.data || defsData.definitions || [];
-      const definitions = Array.isArray(rows) && rows.length > 0 && Array.isArray(rows[0])
-        ? rows.slice(1).map((r: any) => ({
-            formId: r[0],
-            fieldsMarkdown: r[1],
-            logicMarkdown: r[2],
-            configJSON: r[3] ? JSON.parse(r[3]) : null,
-          }))
-        : rows;
-      setFormDefinitions(definitions || []);
+      setFormDefinitions(defsData.definitions || []);
+      setNoticeBoard(noticeData.value || '');
     });
   }, []);
 
-  useEffect(() => {
-    if (!sessionUser) return;
-    apiGet<{ success: boolean; value: string }>('/api/settings/NoticeBoard', { action: 'getSetting', key: 'NoticeBoard' })
-      .then((data) => {
-        try {
-          const parsed = JSON.parse(data.value || '[]');
-          setNoticeBoard(Array.isArray(parsed) ? parsed : []);
-        } catch {
-          setNoticeBoard(data.value ? [{ id: 'legacy', title: '公告欄', content: data.value, publishedAt: '' }] : []);
-        }
-      })
-      .catch(() => setNoticeBoard([]));
-  }, [sessionUser]);
-
-  const currentDef = formDefinitions.find((d) => d.formId === formType);
+  const currentDef = formDefinitions.find(d => d.formId === formType);
 
   const handleDynamicChange = (fieldId: string, value: any) => {
-    setDynamicData((prev) => ({ ...prev, [fieldId]: value }));
+    setDynamicData(prev => {
+      const next = { ...prev, [fieldId]: value };
+      if (fieldId === 'external_collab') {
+        if (value === '是') {
+          delete next.vendor_name;
+        } else {
+          delete next.ext_tax_id;
+          delete next.ext_company_name;
+          delete next.ext_company_owner;
+          setUbnSuccess(false);
+        }
+      }
+      return next;
+    });
+
+    if (fieldId === 'ext_tax_id') {
+      const taxId = value.trim();
+      if (/^\d{8}$/.test(taxId)) {
+        setUbnLoading(true);
+        setUbnSuccess(false);
+        authFetch(`/api/company/${taxId}`)
+          .then(res => {
+            if (!res.ok) throw new Error('API error');
+            return res.json();
+          })
+          .then(data => {
+            if (data.success) {
+              setDynamicData(prev => ({
+                ...prev,
+                ext_company_name: data.name,
+                ext_company_owner: data.owner
+              }));
+              setUbnSuccess(true);
+            }
+          })
+          .catch(err => {
+            console.error("UBN lookup failed:", err);
+          })
+          .finally(() => {
+            setUbnLoading(false);
+          });
+      } else {
+        setUbnSuccess(false);
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sessionUser) {
-      alert('請先登入公司 Email');
-      return;
-    }
-
+    
     setIsSubmitting(true);
-
+    
     const today = new Date();
     const yyyymmdd = today.toISOString().split('T')[0].replace(/-/g, '');
-    const deptCodeMatch = sessionUser.dept.match(/^([A-Za-z0-9]+)/);
-    const deptCode = (deptCodeMatch?.[1] || 'GEN').toUpperCase();
-    const randomSuffix = Math.random().toString(36).slice(2, 6);
-    const ticketId = `${formType}${deptCode}${yyyymmdd}${randomSuffix}`;
-
+    // 提取部門代號，例如 "MK;行銷企劃部" -> "MK"
+    const deptCode = user.dept.split(';')[0].toUpperCase().trim() || 'XX';
+    // 使用 3 碼隨機數作為偽流水號 (001~999)
+    const randomSeq = Math.floor(1 + Math.random() * 999).toString().padStart(3, '0');
+    const ticketId = `${formType}${deptCode}${yyyymmdd}${randomSeq}`;
+    
     let subject = '';
     let amount = '';
     let formData: any = {};
-
-    if (currentDef && currentDef.configJSON && !['AP', 'RD', 'CS'].includes(formType)) {
-      subject = `${formTypesData.find((f) => f.id === formType)?.name || formType} 申請 - ${sessionUser.name}`;
-      formData = { ...dynamicData, ALWAYS: 'TRUE' };
-      if (dynamicData.amount) amount = dynamicData.amount.toString();
-    } else if (formType === 'AP') {
-      subject = apSubject;
-      amount = apAmount;
-      formData = {
-        ALWAYS: 'TRUE',
-        apSubject,
-        apDesc,
-        amount: Number(apAmount || 0),
-        external_collab: apExternal.toString(),
-        ext_company_name: apExtName,
-        ext_company_owner: apExtOwner,
-        ext_tax_id: apExtTaxId,
-      };
-    } else if (formType === 'RD') {
-      subject = `請款單: ${rdExpenseType}`;
-      amount = rdAmount;
-      formData = {
-        ALWAYS: 'TRUE',
-        rd_ref_id: rdRefId,
-        rd_expense_type: rdExpenseType,
-        amount: Number(rdAmount),
-        pay_method: rdPayMethod,
-        description: rdDesc,
-        file_count: rdFileCount,
-        vendor_name: rdVendor,
-        board_approved: rdBoardApproved,
-      };
-    } else if (formType === 'CS') {
-      subject = `用印申請: ${csSealType}`;
-      formData = {
-        ALWAYS: 'TRUE',
-        cs_ref_id: csRefId,
-        seal_type: csSealType,
-        description: csDesc,
-        external_party: csExternalParty,
-      };
+    
+    // 組裝資料 (全面使用動態規格)
+    if (currentDef && currentDef.configJSON) {
+        subject = formData.subject || `${formTypesData.find(f => f.id === formType)?.name || formType} 申請 - ${user.name}`;
+        formData = { ...dynamicData, ALWAYS: "TRUE" };
+        if (dynamicData.amount) amount = dynamicData.amount.toString();
+        // 如果動態表單內有 subject 欄位，優先拿來當標題
+        if (dynamicData.subject) subject = dynamicData.subject;
+    } else {
+        alert("找不到此表單的定義設定！");
+        setIsSubmitting(false);
+        return;
     }
 
     try {
-      const result = await apiPost<{ success: boolean; generatedIds?: string[] }>('/api/submit-approval', {
-        applicantEmail: sessionUser.email,
-        applicantName: sessionUser.name,
-        department: sessionUser.dept,
-        tickets: [{ id: ticketId, formType, subject, amount, formData }]
-      });
-      setSubmitSuccess(true);
-      setGeneratedTicketId(result.generatedIds?.[0] || ticketId);
+        const res = await authFetch('/api/submit-approval', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                applicantEmail: user.email,
+                applicantName: user.name,
+                department: user.dept,
+                tickets: [
+                  { id: ticketId, formType, subject, amount, formData }
+                ]
+            })
+        });
+
+        if (!res.ok) throw new Error('Submission failed');
+        const data = await res.json();
+        setSubmitSuccess(true);
+        setGeneratedTicketId(data.generatedIds ? data.generatedIds[0] : ticketId);
     } catch (error) {
-      console.error('Error submitting form', error);
-      alert(`送出失敗: ${error instanceof Error ? error.message : '未知錯誤'}`);
+        console.error("Error submitting form", error);
+        alert("送出失敗");
     } finally {
-      setIsSubmitting(false);
+        setIsSubmitting(false);
     }
   };
 
   const handleReset = () => {
     setSubmitSuccess(false);
     setDynamicData({});
-    setApSubject('');
-    setApDesc('');
-    setRdAmount('');
-    setCsDesc('');
+    setUbnSuccess(false);
   };
 
   if (submitSuccess) {
@@ -187,52 +165,38 @@ export default function SubmitForm({ sessionUser }: { sessionUser: SessionUser |
         </h2>
       </div>
 
-      <div className="mb-10 bg-white/60 p-6 rounded-2xl border border-slate-200">
-        <div className="flex flex-col sm:flex-row gap-4">
-          <div className="form-input flex-grow !h-14 !text-lg flex items-center text-slate-700 bg-slate-50">{sessionUser?.email || '尚未登入'}</div>
+      {/* 系統公告佈告欄 */}
+      {noticeBoard && (
+        <div className="bg-amber-50/80 border border-amber-200 p-5 rounded-2xl mb-8 flex gap-4 animate-fade-in shadow-sm">
+          <Megaphone className="text-amber-500 w-6 h-6 flex-shrink-0 mt-1" />
+          <div className="prose prose-sm prose-amber max-w-none prose-a:text-amber-600 prose-a:font-bold prose-p:my-1 prose-ul:my-1">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{noticeBoard}</ReactMarkdown>
+          </div>
         </div>
-      </div>
+      )}
 
-      {sessionUser && (
-        <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in">
-          {noticeBoard.length > 0 && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-5 text-sm text-slate-700">
-              <div className="mb-3 text-sm font-bold text-amber-700">公告欄</div>
-              <div className="space-y-4">
-                {noticeBoard.map((notice) => (
-                  <div key={notice.id} className="rounded-xl border border-amber-100 bg-white/70 p-4">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <div className="font-bold text-slate-800">{notice.title}</div>
-                      <div className="text-xs text-slate-400">{notice.publishedAt ? new Date(notice.publishedAt).toLocaleString() : ''}</div>
-                    </div>
-                    <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-strong:text-slate-800 prose-a:text-amber-700">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{notice.content}</ReactMarkdown>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+      <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-2xl flex items-center gap-4">
               <User className="text-emerald-500" />
-              <div><span className="text-xs font-bold text-emerald-600 uppercase">申請人</span><p className="font-bold text-lg">{sessionUser.name}</p></div>
+              <div><span className="text-xs font-bold text-emerald-600 uppercase">申請人</span><p className="font-bold text-lg">{user.name}</p></div>
             </div>
             <div className="bg-emerald-50 border border-emerald-100 p-5 rounded-2xl flex items-center gap-4">
               <Briefcase className="text-emerald-500" />
-              <div><span className="text-xs font-bold text-emerald-600 uppercase">部門</span><p className="font-bold text-lg">{sessionUser.dept}</p></div>
+              <div><span className="text-xs font-bold text-emerald-600 uppercase">部門</span><p className="font-bold text-lg">{user.dept}</p></div>
             </div>
           </div>
 
           <div className="space-y-4">
             <label className="block text-slate-800 font-bold text-lg">選擇表單種類</label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {formTypesData.map((ft) => (
+              {formTypesData.map(ft => (
                 <button
-                  key={ft.id}
-                  type="button"
-                  onClick={() => setFormType(ft.id)}
+                  key={ft.id} type="button" onClick={() => {
+                    setFormType(ft.id);
+                    setDynamicData({});
+                    setUbnSuccess(false);
+                  }}
                   className={`p-5 rounded-2xl border-2 text-center transition-all ${formType === ft.id ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600'}`}
                 >
                   <span className="block font-bold text-xl">{ft.name.split(' (')[0]}</span>
@@ -241,100 +205,77 @@ export default function SubmitForm({ sessionUser }: { sessionUser: SessionUser |
             </div>
           </div>
 
+          {/* 表單內容 */}
           <div className="bg-white/40 p-8 rounded-3xl border border-slate-100 shadow-sm min-h-[200px]">
-            {currentDef && !['AP', 'RD', 'CS'].includes(formType) ? (
-              <div className="space-y-6">
-                <h3 className="text-xl font-bold text-slate-800 border-b pb-4 mb-6">{currentDef.formId} {formTypesData.find((f) => f.id === formType)?.name}</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {currentDef.configJSON?.fields?.map((f: any) => (
-                    <div key={f.id} className={f.type === 'textarea' ? 'md:col-span-2' : ''}>
-                      <label className="block text-slate-700 font-bold mb-2">{f.label}{f.required && ' *'}</label>
-                      {f.type === 'select' ? (
-                        <select className="form-input" required={f.required} onChange={(e) => handleDynamicChange(f.id, e.target.value)}>
-                          <option value="">請選擇</option>
-                          {f.options?.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
-                      ) : f.type === 'textarea' ? (
-                        <textarea className="form-input" rows={4} required={f.required} onChange={(e) => handleDynamicChange(f.id, e.target.value)} />
-                      ) : (
-                        <input type={f.type} className="form-input" required={f.required} onChange={(e) => handleDynamicChange(f.id, e.target.value)} />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : formType === 'AP' ? (
-              <div className="space-y-6">
-                <h3 className="text-xl font-bold">AP 簽呈單</h3>
-                <input className="form-input" placeholder="簽呈主旨" value={apSubject} onChange={(e) => setApSubject(e.target.value)} required />
-                <input className="form-input" placeholder="預估金額" type="number" value={apAmount} onChange={(e) => setApAmount(e.target.value)} />
-                <textarea className="form-input" rows={4} placeholder="簽呈內容說明" value={apDesc} onChange={(e) => setApDesc(e.target.value)} required />
-                <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-700">
-                  <input type="checkbox" checked={apExternal} onChange={(e) => setApExternal(e.target.checked)} />
-                  是否涉及外部合作廠商 / 第三方對象
-                </label>
-                {apExternal && (
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <input className="form-input" placeholder="合作廠商名稱" value={apExtName} onChange={(e) => setApExtName(e.target.value)} required />
-                    <input className="form-input" placeholder="負責人 / 聯絡窗口" value={apExtOwner} onChange={(e) => setApExtOwner(e.target.value)} required />
-                    <input className="form-input md:col-span-2" placeholder="統一編號 / 識別碼" value={apExtTaxId} onChange={(e) => setApExtTaxId(e.target.value)} />
+             {currentDef ? (
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold text-slate-800 border-b pb-4 mb-6">{currentDef.formId} {formTypesData.find(f => f.id === formType)?.name}</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                     {currentDef.configJSON?.fields?.filter((f: any) => {
+                        if (f.showIf) {
+                           const parentVal = dynamicData[f.showIf.field];
+                           if (f.showIf.value === '否') {
+                              return parentVal === '否' || !parentVal;
+                           }
+                           return parentVal === f.showIf.value;
+                        }
+                        return true;
+                     }).map((f: any) => (
+                      <div key={f.id} className={f.type === 'textarea' ? 'md:col-span-2' : ''}>
+                        <label className="block text-slate-700 font-bold mb-2">{f.label}{f.required && ' *'}</label>
+                        {f.type === 'select' ? (
+                          <select 
+                            className="form-input !pl-4" 
+                            required={f.required} 
+                            value={dynamicData[f.id] || ''} 
+                            onChange={e => handleDynamicChange(f.id, e.target.value)}
+                          >
+                            <option value="">請選擇</option>
+                            {f.options?.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
+                          </select>
+                        ) : f.type === 'textarea' ? (
+                          <textarea 
+                            className="form-input !pl-4" 
+                            rows={4} 
+                            required={f.required} 
+                            value={dynamicData[f.id] || ''} 
+                            onChange={e => handleDynamicChange(f.id, e.target.value)} 
+                          />
+                        ) : (
+                          <div className="relative">
+                            <input 
+                              type={f.type} 
+                              className={`form-input ${f.id === 'ext_tax_id' ? '!pl-4 !pr-12' : '!pl-4'}`} 
+                              required={f.required} 
+                              value={dynamicData[f.id] || ''} 
+                              onChange={e => handleDynamicChange(f.id, e.target.value)} 
+                            />
+                            {f.id === 'ext_tax_id' && (ubnLoading || ubnSuccess) && (
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center">
+                                {ubnLoading && <Loader2 className="w-5 h-5 text-emerald-500 animate-spin" />}
+                                {ubnSuccess && <CheckCircle className="w-5 h-5 text-emerald-500 animate-pop-in" />}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {f.id === 'ext_tax_id' && ubnSuccess && (
+                          <p className="text-xs text-emerald-600 mt-1.5 flex items-center gap-1 animate-fade-in font-medium">
+                             已自動帶入公司與負責人資料 (可修改)
+                          </p>
+                        )}
+                      </div>
+                     ))}
                   </div>
-                )}
-              </div>
-            ) : formType === 'RD' ? (
-              <div className="space-y-6">
-                <h3 className="text-xl font-bold">RD 請款單</h3>
-                <input className="form-input" placeholder="對應申請 / 專案單號" value={rdRefId} onChange={(e) => setRdRefId(e.target.value)} />
-                <select className="form-input" value={rdExpenseType} onChange={(e) => setRdExpenseType(e.target.value)}>
-                  <option value="代墊費用">代墊費用</option>
-                  <option value="採購付款">採購付款</option>
-                  <option value="合作費用">合作費用</option>
-                  <option value="顧問服務費">顧問服務費</option>
-                </select>
-                <input className="form-input" placeholder="請款金額" type="number" value={rdAmount} onChange={(e) => setRdAmount(e.target.value)} required />
-                <input className="form-input" placeholder="受款對象 / 廠商名稱" value={rdVendor} onChange={(e) => setRdVendor(e.target.value)} required />
-                <select className="form-input" value={rdPayMethod} onChange={(e) => setRdPayMethod(e.target.value)}>
-                  <option value="">請選擇付款方式</option>
-                  <option value="匯款">匯款</option>
-                  <option value="支票">支票</option>
-                  <option value="零用金">零用金</option>
-                </select>
-                <textarea className="form-input" rows={4} placeholder="請款說明 / 用途" value={rdDesc} onChange={(e) => setRdDesc(e.target.value)} required />
-                <input className="form-input" placeholder="附件數量" type="number" min="0" value={rdFileCount} onChange={(e) => setRdFileCount(Number(e.target.value || 0))} />
-                <select className="form-input" value={rdBoardApproved} onChange={(e) => setRdBoardApproved(e.target.value)}>
-                  <option value="NA">非關係人交易 / 不適用</option>
-                  <option value="APPROVED">已經過董事會同意</option>
-                  <option value="PENDING">尚未經過董事會同意</option>
-                </select>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                <h3 className="text-xl font-bold">CS 用印申請單</h3>
-                <input className="form-input" placeholder="對應核准單號" value={csRefId} onChange={(e) => setCsRefId(e.target.value)} />
-                <select className="form-input" value={csSealType} onChange={(e) => setCsSealType(e.target.value)}>
-                  <option value="經濟部章">經濟部章</option>
-                  <option value="銀行用章">銀行用章</option>
-                  <option value="法務章">法務章</option>
-                  <option value="合約便章">合約便章</option>
-                  <option value="公司小章">公司小章</option>
-                </select>
-                <input className="form-input" placeholder="往來對象 / 外部單位" value={csExternalParty} onChange={(e) => setCsExternalParty(e.target.value)} />
-                <textarea className="form-input" rows={4} placeholder="用印內容與用途說明" value={csDesc} onChange={(e) => setCsDesc(e.target.value)} required />
-              </div>
-            )}
+                </div>
+             ) : (
+               <div className="text-slate-400 italic">尚未定義此表單規格</div>
+             )}
           </div>
 
           <button type="submit" disabled={isSubmitting} className="w-full bg-slate-900 text-white py-4 rounded-xl font-bold text-lg">
-            {isSubmitting ? '單據派送中...' : '送交系統執行簽核'}
+             {isSubmitting ? '單據派送中...' : '送交系統執行簽核'}
           </button>
         </form>
-      )}
-
-      {!sessionUser && (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm font-medium text-amber-700">
-          請先於頁面上方登入公司 Email，再進行申請。
-        </div>
-      )}
     </div>
   );
 }

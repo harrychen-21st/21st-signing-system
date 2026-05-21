@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Plus, Trash2, Save, AlertCircle, GitMerge, Shield, Loader2, X, Sparkles, FileText, Code, Edit3, ChevronRight, Check, FileSignature } from 'lucide-react';
+import { Settings, Plus, Trash2, Save, AlertCircle, GitMerge, Shield, Loader2, X, Sparkles, FileText, Code, Edit3, ChevronRight, Check, FileSignature, Megaphone } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { apiGet, apiPost, USE_APPS_SCRIPT_DIRECT } from './lib/api';
+import { authFetch } from './authFetch';
 
 interface Rule {
   id: string;
@@ -27,15 +27,20 @@ interface FormDefinition {
   configJSON: any;
 }
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ user }: { user: any }) {
+  // A: Existing Forms, B: New Form, C: Notice Board
   const [mainMode, setMainMode] = useState<'A' | 'B' | 'C'>('A');
+
+  // Mode C: Notice Board
+  const [noticeContent, setNoticeContent] = useState('');
+  const [isNoticeSaving, setIsNoticeSaving] = useState(false);
+  const [noticeSaved, setNoticeSaved] = useState(false);
   
   const [formTypes, setFormTypes] = useState<FormType[]>([]);
   const [allDefinitions, setAllDefinitions] = useState<FormDefinition[]>([]);
   const [activeFormId, setActiveFormId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [notices, setNotices] = useState<Array<{ id: string; title: string; content: string; publishedAt: string }>>([]);
 
   // Edit Mode for Tab A
   const [isEditingSpecs, setIsEditingSpecs] = useState(false);
@@ -52,44 +57,55 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchInitialData();
+    loadNoticeBoard();
   }, []);
+
+  const loadNoticeBoard = async () => {
+    try {
+      const res = await authFetch('/api/settings/NoticeBoard');
+      const data = await res.json();
+      setNoticeContent(data.value || '');
+    } catch (e) {
+      console.error('Failed to load notice board', e);
+    }
+  };
+
+  const handleSaveNotice = async () => {
+    setIsNoticeSaving(true);
+    setNoticeSaved(false);
+    try {
+      await authFetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'NoticeBoard', value: noticeContent })
+      });
+      setNoticeSaved(true);
+      setTimeout(() => setNoticeSaved(false), 3000);
+    } catch (e) {
+      alert('儲存失敗，請稍後再試。');
+    } finally {
+      setIsNoticeSaving(false);
+    }
+  };
 
   const fetchInitialData = async () => {
     setIsLoading(true);
     try {
-      const [typesData, defsRaw, noticeData] = await Promise.all([
-        apiGet<{formTypes: FormType[]}>('/api/form-types', { action: 'getFormTypes' }),
-        apiGet<any>('/api/form-definitions', { action: 'getData', sheet: 'FormDefinitions' }),
-        apiGet<{ value: string }>('/api/settings/NoticeBoard', { action: 'getSetting', key: 'NoticeBoard' })
+      const [typesRes, defsRes] = await Promise.all([
+        authFetch('/api/form-types'),
+        authFetch('/api/form-definitions')
       ]);
-
-      const defsRows = defsRaw.data || defsRaw.definitions || [];
-      const definitions = Array.isArray(defsRows) && defsRows.length > 0 && Array.isArray(defsRows[0])
-        ? defsRows.slice(1).map((r: any) => ({
-            formId: r[0],
-            fieldsMarkdown: r[1],
-            logicMarkdown: r[2],
-            configJSON: r[3] ? JSON.parse(r[3]) : null,
-          }))
-        : defsRows;
+      const typesData = await typesRes.json();
+      const defsData = await defsRes.json();
       
       setFormTypes(typesData.formTypes || []);
-      setAllDefinitions(definitions || []);
-      try {
-        const parsed = JSON.parse((noticeData as any)?.value || '[]');
-        setNotices(Array.isArray(parsed) ? parsed : []);
-      } catch {
-        setNotices([]);
-      }
+      setAllDefinitions(defsData.definitions || []);
       
       if (typesData.formTypes?.length > 0 && !activeFormId) {
         setActiveFormId(typesData.formTypes[0].id);
       }
     } catch (error) {
       console.error("Failed to fetch admin data", error);
-      if (USE_APPS_SCRIPT_DIRECT) {
-        alert('系統管理目前無法從 Apps Script 讀取資料。請先確認 Apps Script 支援 getFormTypes 與 getData(FormDefinitions)。');
-      }
     } finally {
       setIsLoading(false);
     }
@@ -120,7 +136,7 @@ export default function AdminDashboard() {
       const apiKey = (process as any).env?.GEMINI_API_KEY || (window as any).process?.env?.GEMINI_API_KEY;
       
       if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        throw new Error('尚未偵測到 GEMINI_API_KEY。GitHub Pages 版本請改用 VITE_GEMINI_API_KEY，或先不要使用 AI 建模。');
+        throw new Error('尚未偵測到 GEMINI_API_KEY。請點擊左側「Settings (齒輪)」->「Secrets」進行設定。');
       }
 
       const ai = new GoogleGenAI({ apiKey });
@@ -177,39 +193,23 @@ export default function AdminDashboard() {
     setIsSaving(true);
     try {
       // 1. Create Form Type
-      await apiPost('/api/form-types', {
-        action: 'addFormType',
-        formId: newFormId.toUpperCase(),
-        formName: newFormName,
+      await authFetch('/api/form-types', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: newFormId.toUpperCase(), name: newFormName })
       });
 
       // 2. Sync Specs and Rules
       await Promise.all([
-        apiPost(`/api/rules/${newFormId.toUpperCase()}`, {
-          action: 'saveRules',
-          formType: newFormId.toUpperCase(),
-          rows: tempRules.map(r => [
-            r.id,
-            newFormId.toUpperCase(),
-            r.stage,
-            r.conditionField,
-            r.conditionOp,
-            r.conditionVal,
-            r.approverType,
-            r.approverValue,
-          ]),
+        authFetch(`/api/rules/${newFormId.toUpperCase()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rules: tempRules })
         }),
-        apiPost(`/api/form-definitions/${newFormId.toUpperCase()}`, {
-          action: 'saveData',
-          sheet: 'FormDefinitions',
-          matchColumn: 1,
-          matchValue: newFormId.toUpperCase(),
-          row: [
-            newFormId.toUpperCase(),
-            tempSpecs.fieldsMarkdown,
-            tempSpecs.logicMarkdown,
-            JSON.stringify(tempSpecs.configJSON),
-          ],
+        authFetch(`/api/form-definitions/${newFormId.toUpperCase()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(tempSpecs)
         })
       ]);
 
@@ -233,17 +233,17 @@ export default function AdminDashboard() {
     setIsSaving(true);
     try {
         const spec = allDefinitions.find(d => d.formId === activeFormId);
-        await apiPost(`/api/form-definitions/${activeFormId}`, {
-            action: 'saveData',
-            sheet: 'FormDefinitions',
-            matchColumn: 1,
-            matchValue: activeFormId,
-            row: [
-              activeFormId,
-              editedFieldsMd,
-              editedLogicMd,
-              JSON.stringify(spec?.configJSON || { fields: [] }),
-            ]
+        const updatedSpec = {
+            formId: activeFormId,
+            fieldsMarkdown: editedFieldsMd,
+            logicMarkdown: editedLogicMd,
+            configJSON: spec?.configJSON || { fields: [] }
+        };
+
+        await authFetch(`/api/form-definitions/${activeFormId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedSpec)
         });
 
         alert('規格已更新成功！');
@@ -256,30 +256,6 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleSaveNoticeBoard = async () => {
-    setIsSaving(true);
-    try {
-      await apiPost('/api/settings', { key: 'NoticeBoard', value: JSON.stringify(notices) });
-      alert('公告欄已更新');
-    } catch (error) {
-      alert('公告欄儲存失敗');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleAddNotice = () => {
-    setNotices(prev => [{ id: `notice-${Date.now()}`, title: '新公告', content: '', publishedAt: new Date().toISOString() }, ...prev]);
-  };
-
-  const handleNoticeChange = (id: string, key: 'title' | 'content', value: string) => {
-    setNotices(prev => prev.map(notice => notice.id === id ? { ...notice, [key]: value } : notice));
-  };
-
-  const handleDeleteNotice = (id: string) => {
-    setNotices(prev => prev.filter(notice => notice.id !== id));
-  };
-
   const currentSpec = allDefinitions.find(d => d.formId === activeFormId);
 
   return (
@@ -289,7 +265,7 @@ export default function AdminDashboard() {
           <Settings className="text-indigo-500 w-8 h-8" /> 智能表單管理中心
         </h2>
         
-        {/* A/B 模式切換器 */}
+        {/* A/B/C 模式切換器 */}
         <div className="flex flex-wrap justify-center gap-4 mt-8">
           <button 
             onClick={() => setMainMode('A')}
@@ -305,9 +281,9 @@ export default function AdminDashboard() {
           </button>
           <button 
             onClick={() => setMainMode('C')}
-            className={`flex items-center gap-2 px-8 py-3 rounded-2xl font-bold transition-all border-2 ${mainMode === 'C' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl scale-105' : 'bg-white text-slate-500 border-slate-100 hover:border-indigo-200'}`}
+            className={`flex items-center gap-2 px-8 py-3 rounded-2xl font-bold transition-all border-2 ${mainMode === 'C' ? 'bg-amber-500 text-white border-amber-500 shadow-xl scale-105' : 'bg-white text-slate-500 border-slate-100 hover:border-amber-200'}`}
           >
-            <AlertCircle size={18} /> C. 公告欄設定
+            <Megaphone size={18} /> C. 佈告欄管理
           </button>
         </div>
       </div>
@@ -319,7 +295,49 @@ export default function AdminDashboard() {
         </div>
       ) : (
         <div className="animate-fade-in">
-          {mainMode === 'A' ? (
+          
+          {mainMode === 'C' ? (
+            /* Option C: Notice Board Manager */
+            <div className="max-w-3xl mx-auto animate-slide-up space-y-6">
+              <div className="bg-white p-8 rounded-3xl border border-amber-100 shadow-xl">
+                <h3 className="text-xl font-bold text-amber-700 flex items-center gap-2 mb-2">
+                  <Megaphone size={20} /> 申請頁面佈告欄編輯
+                </h3>
+                <p className="text-sm text-slate-500 mb-6">支援 <strong>Markdown</strong> 語法，超連結格式為 <code className="bg-slate-100 px-1 rounded">[顯示文字](網址)</code>，修改後儲存即生效。</p>
+                <textarea
+                  className="form-input w-full font-mono text-sm p-4 leading-relaxed bg-slate-50 border-amber-200 focus:border-amber-400 focus:ring-amber-400/20"
+                  rows={12}
+                  placeholder="在此輸入公告內容，支援 Markdown 語法...&#10;例如：[點此查看規範](https://...)"
+                  value={noticeContent}
+                  onChange={e => setNoticeContent(e.target.value)}
+                />
+                <div className="mt-4 flex items-center justify-between">
+                  {noticeSaved && (
+                    <span className="text-emerald-600 font-semibold flex items-center gap-1 text-sm"><Check size={16}/> 已成功儲存！員工下次進入頁面即可看到更新內容。</span>
+                  )}
+                  {!noticeSaved && <span />}
+                  <button
+                    onClick={handleSaveNotice}
+                    disabled={isNoticeSaving}
+                    className="flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-amber-200 transition-all disabled:opacity-60"
+                  >
+                    {isNoticeSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                    儲存並發布
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 p-6 rounded-3xl">
+                <h4 className="font-bold text-amber-700 mb-3 text-sm uppercase tracking-widest">預覽 (員工看到的效果)</h4>
+                <div className="flex gap-3">
+                  <Megaphone className="text-amber-500 w-5 h-5 flex-shrink-0 mt-1" />
+                  <div className="prose prose-sm prose-amber max-w-none prose-a:text-amber-600 prose-a:font-bold">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{noticeContent || '*（尚未輸入公告內容）*'}</ReactMarkdown>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : mainMode === 'A' ? (
             /* Option A UI */
             <div className="flex flex-col md:flex-row gap-8">
               {/* 左側表單目錄 */}
@@ -418,7 +436,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
             </div>
-          ) : mainMode === 'B' ? (
+          ) : (
             /* Option B UI: Focus on Creation */
             <div className="max-w-4xl mx-auto space-y-10 animate-slide-up">
                <div className="bg-white p-8 xs:p-12 rounded-[2.5rem] border border-slate-100 shadow-2xl relative overflow-hidden">
@@ -507,33 +525,8 @@ export default function AdminDashboard() {
                     <p className="text-center text-slate-400 font-bold text-sm tracking-wide">按下按鈕後，系統將自動配置 API 路由、資料庫欄位映射與簽核角色權限。</p>
                  </div>
                )}
-             </div>
-           ) : (
-            <div className="max-w-5xl mx-auto space-y-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-bold text-slate-800">公告欄設定</h3>
-                  <p className="text-sm text-slate-500">可設定多筆公告，發布時間會一併顯示在前台。</p>
-                </div>
-                <div className="flex gap-3">
-                  <button onClick={handleAddNotice} className="rounded-xl bg-slate-900 px-5 py-2 font-bold text-white">新增公告</button>
-                  <button onClick={handleSaveNoticeBoard} disabled={isSaving} className="rounded-xl bg-amber-600 px-5 py-2 font-bold text-white disabled:opacity-60">{isSaving ? '儲存中...' : '儲存全部公告'}</button>
-                </div>
-              </div>
-              <div className="space-y-4">
-                {notices.map((notice) => (
-                  <div key={notice.id} className="rounded-3xl border border-amber-200 bg-amber-50/70 p-6">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="text-xs font-mono text-slate-400">發布時間：{notice.publishedAt ? new Date(notice.publishedAt).toLocaleString() : ''}</div>
-                      <button onClick={() => handleDeleteNotice(notice.id)} className="rounded-lg bg-rose-100 px-3 py-1 text-sm font-bold text-rose-700">刪除</button>
-                    </div>
-                    <input value={notice.title} onChange={(e) => handleNoticeChange(notice.id, 'title', e.target.value)} className="form-input mb-3 w-full" placeholder="公告標題" />
-                    <textarea value={notice.content} onChange={(e) => handleNoticeChange(notice.id, 'content', e.target.value)} rows={6} className="form-input w-full font-mono text-sm" placeholder={'**系統公告**\n- 請填寫內容'} />
-                  </div>
-                ))}
-              </div>
             </div>
-            )}
+          )}
         </div>
       )}
     </div>
