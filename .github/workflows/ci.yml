@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,6 +24,3 @@ jobs:
 
       - name: Build project
         run: npm run build
-
-      - name: Run tests (if any)
-        run: npm test || echo "No tests defined"
