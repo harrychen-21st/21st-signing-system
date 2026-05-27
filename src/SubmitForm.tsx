@@ -342,6 +342,19 @@ export default function SubmitForm({ user }: { user: any }) {
     }
   };
 
+  const handlePrint = (applicationNumber: string) => {
+    const originalTitle = document.title;
+    const restoreTitle = () => {
+      document.title = originalTitle;
+      window.removeEventListener('afterprint', restoreTitle);
+    };
+
+    document.title = applicationNumber;
+    window.addEventListener('afterprint', restoreTitle);
+    window.print();
+    window.setTimeout(restoreTitle, 1000);
+  };
+
   if (submittedTicket) {
     return (
       <>
@@ -357,7 +370,7 @@ export default function SubmitForm({ user }: { user: any }) {
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
-              onClick={() => window.print()}
+              onClick={() => handlePrint(submittedTicket.id)}
               className="bg-slate-900 hover:bg-slate-700 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2"
             >
               <Printer className="w-5 h-5" />
