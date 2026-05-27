@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Mail, Loader2, CheckCircle, XCircle, Clock, AlertCircle, FileText, MessageSquare } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { CheckCircle, FileText, Loader2, Mail, RefreshCw, ShieldCheck } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 interface Ticket {
@@ -10,275 +10,158 @@ interface Ticket {
   dept: string;
   formType: string;
   status: string;
-  stage: string;
   subject: string;
   amount: string;
-  formData?: any;
-  approverType?: string;
+  formData?: Record<string, unknown>;
+}
+
+const statusLabels: Record<string, string> = {
+  Submitted: '已送出',
+  Checking: '查核中',
+  ActionRequired: '需人工處理',
+  Completed: '已完成',
+  Cancelled: '已作廢',
+  Pending: '舊資料：待處理',
+  Approved: '舊資料：已核准',
+  Rejected: '舊資料：已駁回',
+};
+
+function valueOf(ticket: Ticket, key: string) {
+  const value = ticket.formData?.[key];
+  return value == null || value === '' ? '-' : String(value);
 }
 
 export default function ApproverDashboard({ user }: { user: any }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isFetching, setIsFetching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [note, setNote] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    if (user && user.email) {
-      fetchTickets(user.email);
-    }
-  }, [user]);
-
-  // Modal states
-  const [activeModal, setActiveModal] = useState<{ticket: Ticket, action: 'approve' | 'reject'} | null>(null);
-  const [commentText, setCommentText] = useState('');
-  
-  // AML & RP States
-  const [amlResult, setAmlResult] = useState('');
-  const [rpResult, setRpResult] = useState('');
-
-  const fetchTickets = async (emailToFetch: string) => {
-    if (!emailToFetch) return;
-
+  const fetchTickets = async () => {
     setIsFetching(true);
-    setHasSearched(true);
     try {
-      const res = await authFetch(`/api/tickets/pending/${encodeURIComponent(emailToFetch.toLowerCase())}`);
-      const data = await res.json();
+      const response = await authFetch('/api/backoffice/tickets');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to fetch tickets');
       setTickets(data.tickets || []);
-    } catch (error) {
-      console.error("Failed to fetch tickets", error);
-      alert("無法取得簽核單，請稍後再試。");
+    } catch (error: any) {
+      console.error('Failed to fetch backoffice tickets', error);
+      alert(error.message || '無法讀取後台資料');
     } finally {
       setIsFetching(false);
     }
   };
 
-  const openActionModal = (ticket: Ticket, action: 'approve' | 'reject') => {
-    setActiveModal({ ticket, action });
-    setCommentText('');
-    setAmlResult('');
-    setRpResult('');
-  };
+  useEffect(() => {
+    fetchTickets();
+  }, []);
 
-  const confirmAction = async () => {
-    if (!activeModal) return;
-    const { ticket, action } = activeModal;
-    
-    setActionLoading(ticket.id);
-    setActiveModal(null); // Close modal right away
-
+  const completeTicket = async (ticketId: string) => {
+    setActionLoading(ticketId);
     try {
-      const res = await authFetch(`/api/tickets/${ticket.id}/action`, {
+      const response = await authFetch(`/api/tickets/${ticketId}/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          approverEmail: user.email,
-          comment: commentText || (action === 'approve' ? '主管核准' : '主管駁回'),
-          formDataUpdates: ticket.approverType === 'SPECIAL:AML_CHECK' ? { aml_result: amlResult, rp_result: rpResult } : undefined
-        })
+        body: JSON.stringify({ note: note[ticketId] || '' }),
       });
-
-      if (!res.ok) throw new Error('Action failed');
-      const data = await res.json();
-      
-      if (data.success) {
-        // 從清單中移除已處理的單據
-        setTickets(prev => prev.filter(t => t.id !== ticket.id));
-      } else {
-        alert(data.error || '處理失敗');
-      }
-    } catch (error) {
-      console.error("Action error", error);
-      alert("操作失敗，請稍後再試。");
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Failed to complete ticket');
+      setTickets((previous) =>
+        previous.map((ticket) => (ticket.id === ticketId ? { ...ticket, status: 'Completed' } : ticket))
+      );
+    } catch (error: any) {
+      console.error('Failed to complete ticket', error);
+      alert(error.message || '完成結案失敗');
     } finally {
       setActionLoading(null);
     }
   };
 
   return (
-    <>
-      <div className="glass-panel rounded-2xl md:rounded-3xl p-5 sm:p-8 md:p-12 w-full max-w-5xl animate-slide-up z-10">
-        <div className="text-center mb-8 md:mb-10">
-          <h2 className="text-2xl md:text-3xl font-bold text-emerald-900 flex items-center justify-center gap-3 mb-2">
-            <CheckCircle className="text-emerald-500 w-8 h-8" /> 待簽核任務清單
+    <div className="glass-panel rounded-2xl p-5 sm:p-8 md:p-12 w-full max-w-6xl animate-slide-up z-10">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+        <div>
+          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 flex items-center gap-3 mb-2">
+            <ShieldCheck className="text-emerald-500 w-8 h-8" />
+            後台處理區
           </h2>
-          <p className="text-slate-500 text-sm md:text-base tracking-wide">
-            請輸入您的主管信箱，系統將自動撈取等待您簽核的單據
-          </p>
+          <p className="text-slate-500">檢視申請、追蹤 AML/關係人狀態，並在處理完成後結案。</p>
         </div>
-
-        <div className="flex flex-col sm:flex-row gap-4 mb-8">
-          <div className="relative flex-grow bg-white/60 p-4 rounded-xl border border-slate-200 flex items-center gap-3">
-            <Mail className="text-emerald-600 w-5 h-5" />
-            <span className="font-semibold text-slate-700">{user.email}</span>
-          </div>
-          <button 
-            onClick={() => fetchTickets(user.email)}
-            disabled={isFetching}
-            className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-3 rounded-xl font-semibold transition-all disabled:opacity-70 flex items-center justify-center gap-2"
-          >
-            {isFetching ? <Loader2 className="w-5 h-5 animate-spin" /> : '重新整理'}
-          </button>
-        </div>
-
-        {hasSearched && !isFetching && tickets.length === 0 && (
-          <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-slate-200 border-dashed">
-            <div className="w-16 h-16 bg-emerald-100 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4">
-              <CheckCircle className="w-8 h-8" />
-            </div>
-            <h3 className="text-lg font-semibold text-slate-700 mb-1">目前沒有待簽核的單據</h3>
-            <p className="text-slate-500">太棒了！您的待辦清單已經清空。</p>
-          </div>
-        )}
-
-        {tickets.length > 0 && (
-          <div className="space-y-4">
-            {tickets.map(ticket => (
-              <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:shadow-md transition-all">
-                <div className="flex flex-col md:flex-row justify-between gap-6">
-                  
-                  {/* Ticket Info */}
-                  <div className="flex-grow space-y-3">
-                    <div className="flex items-center gap-3">
-                      <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg tracking-wider">
-                        {ticket.formType}
-                      </span>
-                      <span className="font-mono text-slate-500 text-sm">{ticket.id}</span>
-                      <span className="flex items-center gap-1 text-amber-600 text-xs font-medium bg-amber-50 px-2 py-1 rounded-md">
-                        <Clock className="w-3 h-3" /> 等待簽核
-                      </span>
-                    </div>
-                    
-                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                      <FileText className="w-5 h-5 text-slate-400" />
-                      {ticket.subject || '(未提供主旨)'}
-                    </h3>
-                    
-                    <div className="grid grid-cols-2 gap-y-2 text-sm text-slate-600">
-                      <div><span className="text-slate-400">申請人：</span> {ticket.applicantName} ({ticket.dept})</div>
-                      <div><span className="text-slate-400">申請時間：</span> {new Date(ticket.createdAt).toLocaleDateString()}</div>
-                      {ticket.amount && (
-                        <div className="col-span-2 text-emerald-600 font-semibold">
-                          <span className="text-slate-400 font-normal">預估金額：</span> TWD {Number(ticket.amount).toLocaleString()}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex flex-row md:flex-col gap-3 justify-center md:border-l md:border-slate-100 md:pl-6 min-w-[140px]">
-                    <button 
-                      onClick={() => openActionModal(ticket, 'approve')}
-                      disabled={actionLoading === ticket.id}
-                      className="flex-1 flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-500 text-emerald-600 hover:text-white border border-emerald-200 hover:border-emerald-500 px-4 py-2.5 rounded-xl font-medium transition-all disabled:opacity-50"
-                    >
-                      {actionLoading === ticket.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                      核准
-                    </button>
-                    <button 
-                      onClick={() => openActionModal(ticket, 'reject')}
-                      disabled={actionLoading === ticket.id}
-                      className="flex-1 flex items-center justify-center gap-2 bg-rose-50 hover:bg-rose-500 text-rose-600 hover:text-white border border-rose-200 hover:border-rose-500 px-4 py-2.5 rounded-xl font-medium transition-all disabled:opacity-50"
-                    >
-                      {actionLoading === ticket.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-                      駁回
-                    </button>
-                  </div>
-
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <button
+          onClick={fetchTickets}
+          disabled={isFetching}
+          className="bg-slate-900 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-semibold transition-all disabled:opacity-70 flex items-center justify-center gap-2"
+        >
+          {isFetching ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
+          重新整理
+        </button>
       </div>
 
-      {/* Action Modal */}
-      {activeModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 md:p-8 w-full max-w-md shadow-2xl animate-pop-in">
-            <h3 className={`text-xl font-bold flex items-center gap-2 mb-4 ${activeModal.action === 'approve' ? 'text-emerald-700' : 'text-rose-700'}`}>
-              {activeModal.action === 'approve' ? <CheckCircle className="w-6 h-6" /> : <XCircle className="w-6 h-6" />}
-              {activeModal.action === 'approve' ? '核准此申請' : '駁回此申請'}
-            </h3>
-            
-            <p className="text-slate-600 text-sm mb-4">
-              單號：<span className="font-mono font-bold text-slate-800">{activeModal.ticket.id}</span>
-            </p>
+      <div className="relative bg-white/60 p-4 rounded-xl border border-slate-200 flex items-center gap-3 mb-6">
+        <Mail className="text-emerald-600 w-5 h-5" />
+        <span className="font-semibold text-slate-700">{user.email}</span>
+      </div>
 
-            <div className="mb-6">
-              <label className="block text-slate-700 font-semibold mb-2 flex items-center gap-2">
-                <MessageSquare className="w-4 h-4" /> 
-                留下您的簽核意見 {activeModal.action === 'approve' ? '(選填)' : '(必填)'}
-              </label>
-              <textarea 
-                rows={3}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder={activeModal.action === 'approve' ? "同意，辛苦了！" : "預算超支，請重新評估。"}
-                className={`w-full p-3 border rounded-xl outline-none transition-all ${
-                  activeModal.action === 'approve' 
-                    ? 'border-emerald-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10' 
-                    : 'border-rose-200 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10'
-                }`}
-              />
-            </div>
-
-            {activeModal.ticket.approverType === 'SPECIAL:AML_CHECK' && (
-              <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
-                <h4 className="font-bold text-slate-800 text-sm">AML 與關係人交易審查</h4>
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1 text-sm">AML 調查結果</label>
-                  <select className="w-full p-2 border rounded-lg outline-none focus:border-emerald-500" value={amlResult} onChange={e => setAmlResult(e.target.value)}>
-                    <option value="">請選擇...</option>
-                    <option value="正常">正常</option>
-                    <option value="不正常">不正常</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1 text-sm">關係人交易調查結果</label>
-                  <select className="w-full p-2 border rounded-lg outline-none focus:border-emerald-500" value={rpResult} onChange={e => setRpResult(e.target.value)}>
-                    <option value="">請選擇...</option>
-                    <option value="非關係人交易">非關係人交易</option>
-                    <option value="關係人交易且已經過董事會同意">關係人交易且已經過董事會同意</option>
-                    <option value="關係人交易但未經過董事會同意">關係人交易但未經過董事會同意</option>
-                  </select>
-                </div>
-                {(amlResult === '不正常' || rpResult === '關係人交易但未經過董事會同意') && (
-                  <p className="text-rose-600 text-sm font-semibold flex items-center gap-1">
-                    <AlertCircle className="w-4 h-4" /> 審查結果不合規，系統強制只能「駁回」！
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setActiveModal(null)}
-                className="flex-1 px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-all"
-              >
-                取消
-              </button>
-              <button 
-                onClick={confirmAction}
-                disabled={
-                  (activeModal.action === 'reject' && commentText.trim() === '') ||
-                  (activeModal.ticket.approverType === 'SPECIAL:AML_CHECK' && (!amlResult || !rpResult)) ||
-                  (activeModal.action === 'approve' && activeModal.ticket.approverType === 'SPECIAL:AML_CHECK' && (amlResult === '不正常' || rpResult === '關係人交易但未經過董事會同意'))
-                }
-                className={`flex-1 px-4 py-3 font-semibold rounded-xl transition-all text-white disabled:opacity-50 disabled:cursor-not-allowed ${
-                  activeModal.action === 'approve' 
-                    ? 'bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-500/30' 
-                    : 'bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-500/30'
-                }`}
-              >
-                {activeModal.action === 'approve' ? '確認核准' : '確認駁回'}
-              </button>
-            </div>
-          </div>
+      {!isFetching && tickets.length === 0 && (
+        <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-slate-200 border-dashed">
+          <CheckCircle className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
+          <h3 className="text-lg font-semibold text-slate-700">目前沒有待檢視資料</h3>
         </div>
       )}
-    </>
+
+      <div className="space-y-4">
+        {tickets.map((ticket) => (
+          <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+            <div className="flex flex-col lg:flex-row gap-6 justify-between">
+              <div className="space-y-3 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-3 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg">
+                    {ticket.formType}
+                  </span>
+                  <span className="font-mono text-slate-500 text-sm">{ticket.id}</span>
+                  <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg">
+                    {statusLabels[ticket.status] || ticket.status}
+                  </span>
+                </div>
+
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-slate-400" />
+                  {ticket.subject || '(未填主旨)'}
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-slate-600">
+                  <div>申請人：{ticket.applicantName} ({ticket.applicantEmail})</div>
+                  <div>需求單位：{ticket.dept}</div>
+                  <div>填表日期：{new Date(ticket.createdAt).toLocaleString()}</div>
+                  <div>金額：{ticket.amount || '-'}</div>
+                  <div>統編：{valueOf(ticket, 'ext_tax_id')}</div>
+                  <div>商家名稱：{valueOf(ticket, 'ext_company_name')}</div>
+                  <div>負責人姓名：{valueOf(ticket, 'ext_company_owner')}</div>
+                  <div>是否涉及外部公司：{valueOf(ticket, 'external_collab')}</div>
+                </div>
+              </div>
+
+              <div className="lg:w-72 space-y-3">
+                <textarea
+                  rows={3}
+                  value={note[ticket.id] || ''}
+                  onChange={(event) => setNote((previous) => ({ ...previous, [ticket.id]: event.target.value }))}
+                  placeholder="處理備註"
+                  className="w-full p-3 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+                />
+                <button
+                  onClick={() => completeTicket(ticket.id)}
+                  disabled={ticket.status === 'Completed' || actionLoading === ticket.id}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 rounded-xl font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {actionLoading === ticket.id ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
+                  {ticket.status === 'Completed' ? '已完成' : '完成結案'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

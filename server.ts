@@ -40,6 +40,48 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction): any =>
   }
 };
 
+const parseJsonCell = (value: any) => {
+  if (!value) return {};
+  try {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  } catch {
+    return {};
+  }
+};
+
+const extractDeptCode = (department = '') => {
+  const match = String(department).trim().match(/^[A-Za-z0-9]+/);
+  return (match?.[0] || 'XX').toUpperCase();
+};
+
+const postToAppsScript = async (scriptUrl: string, payload: any) => {
+  const response = await fetch(scriptUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const text = await response.text();
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    throw new Error(`Apps Script returned invalid JSON: ${text.substring(0, 160)}`);
+  }
+  if (!response.ok || !result.success) {
+    throw new Error(result.error || `Apps Script returned status: ${response.status}`);
+  }
+  return result;
+};
+
+const defaultFormTypes = [
+  { id: 'AP', name: '簽呈單 (AP)' },
+  { id: 'RD', name: '請款單 (RD)' },
+  { id: 'CS', name: '用印申請單 (CS)' }
+];
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -292,19 +334,17 @@ async function startServer() {
   app.get("/api/form-types", authMiddleware, async (req, res): Promise<any> => {
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) {
-      return res.json({ formTypes: [
-        { id: 'AP', name: '簽呈單 (AP)' },
-        { id: 'RD', name: '請款單 (RD)' },
-        { id: 'CS', name: '用印申請單 (CS)' }
-      ]});
+      return res.json({ formTypes: defaultFormTypes });
     }
 
     try {
       const response = await fetch(`${scriptUrl}?action=getFormTypes`);
       const data = await response.json();
       const rows = data.data || [];
-      const formTypes = rows.slice(1).map((r: any) => ({ id: r[0], name: r[1] }));
-      res.json({ formTypes });
+      const formTypes = rows.slice(1)
+        .map((r: any) => ({ id: r[0], name: r[1] }))
+        .filter((form: any) => form.id && form.name);
+      res.json({ formTypes: formTypes.length ? formTypes : defaultFormTypes });
     } catch (error) {
       console.error("Error fetching form types:", error);
       res.status(500).json({ error: "Failed to fetch form types" });
@@ -640,6 +680,46 @@ graph TD
   });
 
   // ============================================================================
+  // 2. Submit Application Form to Google Sheets via Apps Script
+  // ============================================================================
+  app.post("/api/submit-approval", authMiddleware, async (req, res): Promise<any> => {
+    try {
+      const { applicantEmail, applicantName, department, tickets } = req.body;
+      const firstTicket = tickets?.[0];
+      if (!firstTicket) return res.status(400).json({ error: "Missing ticket payload" });
+
+      const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+      if (!scriptUrl) {
+        const mockId = `${firstTicket.formType || 'AP'}${extractDeptCode(department)}${new Date().toISOString().slice(0, 10).replace(/-/g, '')}001`;
+        return res.json({ success: true, generatedIds: [mockId], applicationNumber: mockId, source: 'mock' });
+      }
+
+      const result = await postToAppsScript(scriptUrl, {
+        action: 'submitApplication',
+        applicantEmail,
+        applicantName,
+        department,
+        formType: firstTicket.formType,
+        subject: firstTicket.subject || '',
+        amount: firstTicket.amount || '',
+        formData: firstTicket.formData || {}
+      });
+
+      return res.json({
+        success: true,
+        generatedIds: [result.applicationNumber],
+        applicationNumber: result.applicationNumber,
+        amlStatus: result.amlStatus
+      });
+    } catch (error: any) {
+      console.error("Error submitting application:", error);
+      return res.status(500).json({ error: error.message || "Internal Server Error" });
+    }
+  });
+
+  // Legacy route body kept below for reference. The handler above returns first.
+  /*
+  // ============================================================================
   // 2. Submit Approval Form to Google Sheets via Apps Script
   // ============================================================================
   app.post("/api/submit-approval", authMiddleware, async (req, res): Promise<any> => {
@@ -726,6 +806,7 @@ graph TD
       res.status(500).json({ error: error.message || "Internal Server Error" });
     }
   });
+  */
 
   // 3. Fetch Pending Tickets for an Approver
   app.get("/api/tickets/pending/:email", authMiddleware, async (req, res): Promise<any> => {
@@ -1163,6 +1244,70 @@ graph TD
     } catch (error) {
       console.error("Error fetching logs", error);
       res.status(500).json({ error: "Failed to fetch logs" });
+    }
+  });
+
+  app.get("/api/backoffice/tickets", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    const roles = req.user?.roles || [];
+    const canViewBackoffice = roles.some((role) => [
+      'ROLE:ADMIN',
+      'ROLE:ADMIN_HEAD',
+      'ROLE:ADMIN_DIRECTOR',
+      'ROLE:FINANCE',
+      'ROLE:RISK',
+      'ROLE:DEPT_HEAD',
+      'ROLE:GM'
+    ].includes(role));
+
+    if (!canViewBackoffice) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    if (!scriptUrl) {
+      return res.json({ tickets: [], source: 'mock' });
+    }
+
+    try {
+      const response = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
+      const data = await response.json();
+      const rows = data.data || [];
+      const tickets = rows.slice(1).map((row: any[]) => ({
+        id: row[0],
+        createdAt: row[1],
+        applicantEmail: row[2],
+        applicantName: row[3],
+        dept: row[4],
+        formType: row[5],
+        status: row[6],
+        subject: row[9],
+        amount: row[10],
+        formData: parseJsonCell(row[12]),
+        currentApprover: row[13] || ''
+      })).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      res.json({ tickets });
+    } catch (error: any) {
+      console.error("Error fetching backoffice tickets:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch backoffice tickets" });
+    }
+  });
+
+  app.post("/api/tickets/:ticketId/complete", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!scriptUrl) return res.json({ success: true, source: 'mock' });
+
+    try {
+      const result = await postToAppsScript(scriptUrl, {
+        action: 'completeTicket',
+        ticketId: req.params.ticketId,
+        completedBy: req.user?.email,
+        note: req.body?.note || ''
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error completing ticket:", error);
+      res.status(500).json({ error: error.message || "Failed to complete ticket" });
     }
   });
 

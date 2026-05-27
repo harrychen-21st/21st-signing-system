@@ -131,6 +131,73 @@ function doPost(e) {
     var action = payload.action;
     var ss = getSpreadsheet_();
 
+    if (action === 'submitApplication') {
+      var now = new Date();
+      var formData = payload.formData || {};
+      var applicationNumber = generateApplicationNumber_(ss, payload.formType, payload.department, now);
+      var amlResult = syncAmlInvestigation_(ss, {
+        createdAt: now,
+        formType: payload.formType,
+        applicationNumber: applicationNumber,
+        companyCode: getSetting_(ss, 'DEFAULT_COMPANY_CODE', '21CD'),
+        department: payload.department,
+        merchantName: formData.ext_company_name || '',
+        taxId: formData.ext_tax_id || '',
+        ownerName: formData.ext_company_owner || ''
+      });
+
+      var status = 'Submitted';
+      if (formData.external_collab === '是') {
+        status = amlResult.needsInvestigation ? 'Checking' : 'Submitted';
+      }
+
+      var ticketsSheet = ensureSheet_(ss, 'Tickets', [
+        'TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType',
+        'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML',
+        'FormData_JSON', 'CurrentApprover'
+      ]);
+
+      ticketsSheet.appendRow([
+        applicationNumber,
+        now.toISOString(),
+        payload.applicantEmail || '',
+        payload.applicantName || '',
+        payload.department || '',
+        payload.formType || '',
+        status,
+        '',
+        '',
+        payload.subject || '',
+        payload.amount || '',
+        formData.external_collab === '是' ? 'TRUE' : 'FALSE',
+        JSON.stringify(formData),
+        ''
+      ]);
+
+      var logSheet = ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp']);
+      logSheet.appendRow([applicationNumber, 'Submitted', payload.applicantEmail || '', '0', '送出申請', now.toISOString()]);
+
+      sendApplicantSubmittedEmail_({
+        to: payload.applicantEmail,
+        applicantName: payload.applicantName,
+        applicationNumber: applicationNumber,
+        formType: payload.formType,
+        subject: payload.subject,
+        createdAt: now
+      });
+
+      return createJsonResponse({
+        success: true,
+        applicationNumber: applicationNumber,
+        amlStatus: amlResult
+      });
+    }
+
+    if (action === 'completeTicket') {
+      var completeResult = completeTicket_(ss, payload.ticketId, payload.completedBy, payload.note);
+      return createJsonResponse({ success: true, ticket: completeResult });
+    }
+
     // 1. 提交新單據 (Tickets) 且寫入提出申請的 Log
     if (action === 'submitTickets') {
       var sheet = ss.getSheetByName("Tickets");
@@ -350,6 +417,197 @@ function createJsonResponse(data) {
 }
 
 // 👉 請在 Google Apps Script 上方選單選擇此函式並按下「執行」，即可自動長出所有真實版的規則與表單設定！
+function ensureSheet_(ss, sheetName, headers) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#d9ead3');
+    return sheet;
+  }
+  if (sheet.getLastRow() === 0) sheet.appendRow(headers);
+  return sheet;
+}
+
+function getSetting_(ss, key, fallback) {
+  var sheet = ss.getSheetByName('SystemSettings');
+  if (!sheet) return fallback;
+  var values = sheet.getDataRange().getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === key) {
+      return String(values[i][1] || '').trim() || fallback;
+    }
+  }
+  return fallback;
+}
+
+function setDefaultSetting_(sheet, key, value) {
+  var values = sheet.getDataRange().getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === key) return;
+  }
+  sheet.appendRow([key, value]);
+}
+
+function extractDeptCode_(department) {
+  var match = String(department || '').trim().match(/^[A-Za-z0-9]+/);
+  return (match ? match[0] : 'XX').toUpperCase();
+}
+
+function generateApplicationNumber_(ss, formType, department, now) {
+  var sheet = ensureSheet_(ss, 'Tickets', ['TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType', 'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML', 'FormData_JSON', 'CurrentApprover']);
+  var dateText = Utilities.formatDate(now, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyyMMdd');
+  var prefix = String(formType || 'AP').toUpperCase() + extractDeptCode_(department) + dateText;
+  var values = sheet.getDataRange().getValues();
+  var maxSeq = 0;
+  for (var i = 1; i < values.length; i++) {
+    var existingId = String(values[i][0] || '');
+    if (existingId.indexOf(prefix) === 0) {
+      var seq = parseInt(existingId.substring(prefix.length), 10);
+      if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+    }
+  }
+  return prefix + String(maxSeq + 1).padStart(3, '0');
+}
+
+function normalizeHeader_(header) {
+  var value = String(header || '').trim();
+  var aliases = { '需求者': '需求單位', '商家': '商家名稱', '統編': '統一編號' };
+  return aliases[value] || value;
+}
+
+function mapHeaderIndexes_(headers) {
+  var indexes = {};
+  for (var i = 0; i < headers.length; i++) indexes[normalizeHeader_(headers[i])] = i;
+  return indexes;
+}
+
+function findPreviousAmlRecord_(sheet, taxId) {
+  if (!taxId || sheet.getLastRow() < 2) return null;
+  var values = sheet.getDataRange().getValues();
+  var indexes = mapHeaderIndexes_(values[0]);
+  var taxIndex = indexes['統一編號'];
+  var adminIndex = indexes['通知管理處查詢'];
+  var riskIndex = indexes['通知風控查詢'];
+  for (var i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][taxIndex] || '').trim() === String(taxId).trim()) {
+      return {
+        adminStatus: adminIndex == null ? '' : String(values[i][adminIndex] || '').trim(),
+        riskStatus: riskIndex == null ? '' : String(values[i][riskIndex] || '').trim()
+      };
+    }
+  }
+  return null;
+}
+
+function syncAmlInvestigation_(ss, record) {
+  if (!record.taxId) return { skipped: true, reason: 'No tax ID' };
+  var amlSheetId = getSetting_(ss, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
+  var amlSs = SpreadsheetApp.openById(amlSheetId);
+  var sheet = amlSs.getSheets()[0];
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['填表日期', '表單類型', '表單編號', '公司別', '需求單位', '商家名稱', '統一編號', '負責人姓名', '通知管理處查詢', '通知風控查詢']);
+  }
+  var values = sheet.getDataRange().getValues();
+  var previous = findPreviousAmlRecord_(sheet, record.taxId);
+  var adminStatus = previous && previous.adminStatus === '已調查' ? '已調查' : '已通知待調查';
+  var riskStatus = previous && previous.riskStatus === '已調查' ? '已調查' : '已通知待調查';
+  var needsInvestigation = adminStatus !== '已調查' || riskStatus !== '已調查';
+  var dataByHeader = {
+    '填表日期': Utilities.formatDate(record.createdAt, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy/MM/dd HH:mm:ss'),
+    '表單類型': record.formType,
+    '表單編號': record.applicationNumber,
+    '公司別': record.companyCode,
+    '需求單位': record.department,
+    '需求者': record.department,
+    '商家名稱': record.merchantName,
+    '商家': record.merchantName,
+    '統一編號': record.taxId,
+    '統編': record.taxId,
+    '負責人姓名': record.ownerName,
+    '通知管理處查詢': adminStatus,
+    '通知風控查詢': riskStatus
+  };
+  var headers = values[0];
+  var row = headers.map(function(header) {
+    return dataByHeader[normalizeHeader_(header)] || dataByHeader[String(header).trim()] || '';
+  });
+  sheet.appendRow(row);
+  if (needsInvestigation) sendInvestigationEmails_(ss, record, adminStatus, riskStatus);
+  return { needsInvestigation: needsInvestigation, adminStatus: adminStatus, riskStatus: riskStatus };
+}
+
+function parseEmailList_(value) {
+  return String(value || '').split(',').map(function(email) { return email.trim(); }).filter(Boolean);
+}
+
+function sendInvestigationEmails_(ss, record, adminStatus, riskStatus) {
+  var adminEmails = adminStatus === '已調查' ? [] : parseEmailList_(getSetting_(ss, 'ADMIN_CHECK_EMAILS', ''));
+  var riskEmails = riskStatus === '已調查' ? [] : parseEmailList_(getSetting_(ss, 'RISK_CHECK_EMAILS', ''));
+  var recipients = adminEmails.concat(riskEmails);
+  if (!recipients.length) return;
+  var body = [
+    '請協助進行 AML / 關係人調查。',
+    '',
+    '表單編號：' + record.applicationNumber,
+    '表單類型：' + record.formType,
+    '需求單位：' + record.department,
+    '公司別：' + record.companyCode,
+    '商家名稱：' + record.merchantName,
+    '統一編號：' + record.taxId,
+    '負責人姓名：' + record.ownerName,
+    '',
+    '請至 AML/關係人調查 Google Sheet 完成調查後，將狀態調整為「已調查」。'
+  ].join('\n');
+  MailApp.sendEmail({ to: recipients.join(','), subject: 'AML/關係人調查通知 - ' + record.applicationNumber, body: body, name: '21CD 內部申請系統' });
+}
+
+function sendApplicantSubmittedEmail_(params) {
+  if (!params.to) return;
+  var body = [
+    (params.applicantName || '您好') + '，您的申請已送出。',
+    '',
+    '表單編號：' + params.applicationNumber,
+    '表單類型：' + params.formType,
+    '主旨：' + (params.subject || '-'),
+    '填表日期：' + Utilities.formatDate(params.createdAt, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy/MM/dd HH:mm:ss'),
+    '',
+    '請保留此編號，以利後續查詢。'
+  ].join('\n');
+  MailApp.sendEmail({ to: params.to, subject: '申請已送出 - ' + params.applicationNumber, body: body, name: '21CD 內部申請系統' });
+}
+
+function completeTicket_(ss, ticketId, completedBy, note) {
+  var sheet = ss.getSheetByName('Tickets');
+  if (!sheet) throw new Error('Tickets sheet not found');
+  var values = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  var applicantEmail = '';
+  var subject = '';
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '') === String(ticketId || '')) {
+      rowIndex = i + 1;
+      applicantEmail = values[i][2];
+      subject = values[i][9];
+      break;
+    }
+  }
+  if (rowIndex < 0) throw new Error('Ticket not found: ' + ticketId);
+  sheet.getRange(rowIndex, 7).setValue('Completed');
+  sheet.getRange(rowIndex, 14).setValue('');
+  var logSheet = ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp']);
+  logSheet.appendRow([ticketId, 'Completed', completedBy || '', 'END', note || '後台完成結案', new Date().toISOString()]);
+  if (applicantEmail) {
+    MailApp.sendEmail({
+      to: applicantEmail,
+      subject: '申請已完成 - ' + ticketId,
+      body: ['您的申請已完成。', '', '表單編號：' + ticketId, '主旨：' + (subject || '-'), '備註：' + (note || '-')].join('\n'),
+      name: '21CD 內部申請系統'
+    });
+  }
+  return { id: ticketId, status: 'Completed' };
+}
+
 function setupRealData() {
   var ss = getSpreadsheet_();
   
@@ -373,6 +631,10 @@ function setupRealData() {
 
   // 預設佈告欄內容
   var settingsData = settingsSheet.getDataRange().getValues();
+  setDefaultSetting_(settingsSheet, "DEFAULT_COMPANY_CODE", "21CD");
+  setDefaultSetting_(settingsSheet, "AML_SHEET_ID", "1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4");
+  setDefaultSetting_(settingsSheet, "ADMIN_CHECK_EMAILS", "");
+  setDefaultSetting_(settingsSheet, "RISK_CHECK_EMAILS", "");
   if (settingsData.length <= 1) {
     settingsSheet.appendRow(["NoticeBoard", "歡迎使用企業內部簽核系統！\n\n- 若有任何系統操作問題，請聯繫 [IT 資訊處](#)。\n- [點擊此處查看簽核流程規範文件](#)"]);
   }
