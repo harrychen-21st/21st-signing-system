@@ -21,7 +21,13 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        throw new Error(`登入 API 回應格式錯誤 (${res.status})，請確認 Vercel API 部署是否成功。`);
+      }
       
       if (!res.ok || !data.success) {
         throw new Error(data.error || '登入失敗');
