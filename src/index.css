@@ -168,4 +168,10 @@
     break-inside: avoid;
     page-break-inside: avoid;
   }
+
+  .print-long-field {
+    break-inside: auto;
+    page-break-inside: auto;
+    overflow-wrap: anywhere;
+  }
 }

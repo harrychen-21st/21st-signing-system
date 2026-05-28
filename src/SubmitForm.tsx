@@ -109,8 +109,13 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
+function isLongPrintField(key: string) {
+  const label = fieldLabels[key] || key;
+  return key === 'description' || label.includes('說明') || label.includes('用途') || label.includes('內容');
+}
+
 function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
-  const hiddenPrintFields = new Set(['ALWAYS', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email']);
+  const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email']);
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
   const signers = ['董事長', '總經理', '管理本部長', '單位本部長', '單位處主管', '申請人'];
   const formTypeDisplay = ticket.formTypeName || ticket.formType;
@@ -149,22 +154,37 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
             <div className="text-[10px] font-semibold text-slate-500">填表日期</div>
             <div className="font-semibold">{new Date(ticket.createdAt).toLocaleString()}</div>
           </div>
-          <div className="col-span-4">
-            <div className="text-[10px] font-semibold text-slate-500">主旨</div>
-            <div className="font-semibold">{ticket.subject || '-'}</div>
-          </div>
         </div>
       </section>
 
       <section className="print-section mb-4">
+        <h2 className="mb-2 text-sm font-bold text-slate-900">主旨</h2>
+        <div className="rounded-md border border-slate-300 px-3 py-2 font-semibold text-slate-950">
+          {ticket.subject || '-'}
+        </div>
+      </section>
+
+      <section className="mb-4">
         <h2 className="mb-2 text-sm font-bold text-slate-900">申請內容</h2>
         <div className="grid grid-cols-2 gap-x-5 gap-y-2">
-          {visibleEntries.map(([key, value]) => (
-            <div key={key} className="border-b border-slate-200 pb-1.5">
-              <div className="text-[10px] font-semibold text-slate-500">{fieldLabels[key] || key}</div>
-              <div className="min-h-5 whitespace-pre-wrap font-medium text-slate-900">{displayValue(value)}</div>
-            </div>
-          ))}
+          {visibleEntries.map(([key, value]) => {
+            const longField = isLongPrintField(key);
+            return (
+              <div
+                key={key}
+                className={
+                  longField
+                    ? 'print-long-field col-span-2 rounded-md border border-slate-300 p-3'
+                    : 'border-b border-slate-200 pb-1.5'
+                }
+              >
+                <div className="text-[10px] font-semibold text-slate-500">{fieldLabels[key] || key}</div>
+                <div className={longField ? 'mt-1 min-h-28 whitespace-pre-wrap break-words font-medium leading-6 text-slate-900' : 'min-h-5 whitespace-pre-wrap break-words font-medium text-slate-900'}>
+                  {displayValue(value)}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
 
