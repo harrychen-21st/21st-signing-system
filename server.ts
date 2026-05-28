@@ -1,5 +1,4 @@
 import express, { Request, Response, NextFunction } from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
@@ -130,9 +129,8 @@ const mapMeetingBooking = (row: any[]) => {
   };
 };
 
-async function startServer() {
+export async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   app.use(express.json());
 
@@ -1488,10 +1486,18 @@ graph TD
     }
   });
 
+  return app;
+}
+
+async function startServer() {
+  const app = await createApp();
+  const PORT = Number(process.env.PORT || 3000);
+
   // ============================================================================
   // Vite Middleware for Development / Static Serving for Production
   // ============================================================================
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -1510,4 +1516,6 @@ graph TD
   });
 }
 
-startServer();
+if (process.env.VERCEL !== '1') {
+  startServer();
+}
