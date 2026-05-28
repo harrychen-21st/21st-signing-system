@@ -82,6 +82,54 @@ const defaultFormTypes = [
   { id: 'CS', name: '用印申請單 (CS)' }
 ];
 
+const meetingRoomHeaders = ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt'];
+const meetingBookingHeaders = ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt'];
+
+const isAdminUser = (user?: { roles?: string[] }) => user?.roles?.includes('ROLE:ADMIN');
+
+const rowToObject = (headers: string[], row: any[]) =>
+  headers.reduce((record: Record<string, any>, header, index) => {
+    record[header] = row[index] ?? '';
+    return record;
+  }, {});
+
+const mapMeetingRoom = (row: any[]) => {
+  const item = rowToObject(meetingRoomHeaders, row);
+  return {
+    id: item.RoomID,
+    name: item.RoomName,
+    location: item.Location,
+    capacity: item.Capacity,
+    isActive: String(item.IsActive || '').toUpperCase() !== 'FALSE',
+    sortOrder: Number(item.SortOrder || 0),
+    openTime: item.OpenTime || '09:00',
+    closeTime: item.CloseTime || '18:00',
+    createdAt: item.CreatedAt
+  };
+};
+
+const mapMeetingBooking = (row: any[]) => {
+  const item = rowToObject(meetingBookingHeaders, row);
+  return {
+    id: item.BookingID,
+    roomId: item.RoomID,
+    roomName: item.RoomName,
+    bookerEmail: item.BookerEmail,
+    bookerName: item.BookerName,
+    department: item.Department,
+    date: item.Date,
+    startTime: item.StartTime,
+    endTime: item.EndTime,
+    purpose: item.Purpose,
+    status: item.Status || 'Booked',
+    createdAt: item.CreatedAt,
+    updatedAt: item.UpdatedAt,
+    cancelledAt: item.CancelledAt,
+    cancelledBy: item.CancelledBy,
+    reminderSentAt: item.ReminderSentAt
+  };
+};
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -1308,6 +1356,135 @@ graph TD
     } catch (error: any) {
       console.error("Error completing ticket:", error);
       res.status(500).json({ error: error.message || "Failed to complete ticket" });
+    }
+  });
+
+  app.get("/api/meeting-rooms", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!scriptUrl) {
+      return res.json({
+        rooms: [
+          { id: 'ROOM-5F', name: '5F會議室', location: '5F', capacity: '8', isActive: true, sortOrder: 1, openTime: '09:00', closeTime: '18:00' },
+          { id: 'ROOM-11F', name: '11F會議室', location: '11F', capacity: '12', isActive: true, sortOrder: 2, openTime: '09:00', closeTime: '18:00' }
+        ],
+        source: 'mock'
+      });
+    }
+
+    try {
+      const response = await fetch(`${scriptUrl}?action=getData&sheet=MeetingRooms`);
+      const data = await response.json();
+      const rows = data.data || [];
+      const rooms = rows.slice(1)
+        .map(mapMeetingRoom)
+        .filter((room: any) => room.id)
+        .sort((a: any, b: any) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'zh-Hant'));
+      res.json({ rooms });
+    } catch (error: any) {
+      console.error("Error fetching meeting rooms:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch meeting rooms" });
+    }
+  });
+
+  app.post("/api/meeting-rooms", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    const now = new Date().toISOString();
+    const roomId = String(req.body.id || `ROOM-${Date.now()}`).trim();
+    const roomName = String(req.body.name || '').trim();
+    if (!roomName) return res.status(400).json({ error: "會議室名稱必填" });
+
+    if (!scriptUrl) return res.json({ success: true, source: 'mock' });
+
+    try {
+      const result = await postToAppsScript(scriptUrl, {
+        action: 'saveMeetingRoom',
+        room: {
+          id: roomId,
+          name: roomName,
+          location: String(req.body.location || '').trim(),
+          capacity: String(req.body.capacity || '').trim(),
+          isActive: req.body.isActive !== false,
+          sortOrder: String(req.body.sortOrder || ''),
+          openTime: '09:00',
+          closeTime: '18:00',
+          createdAt: req.body.createdAt || now
+        }
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error saving meeting room:", error);
+      res.status(500).json({ error: error.message || "Failed to save meeting room" });
+    }
+  });
+
+  app.get("/api/meeting-bookings", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    const startDate = String(req.query.startDate || '');
+    const endDate = String(req.query.endDate || '');
+    const mineOnly = req.query.mine === 'true';
+
+    if (!scriptUrl) return res.json({ bookings: [], source: 'mock' });
+
+    try {
+      const response = await fetch(`${scriptUrl}?action=getData&sheet=MeetingBookings`);
+      const data = await response.json();
+      const rows = data.data || [];
+      const bookings = rows.slice(1)
+        .map(mapMeetingBooking)
+        .filter((booking: any) => booking.id)
+        .filter((booking: any) => booking.status !== 'Cancelled')
+        .filter((booking: any) => !startDate || booking.date >= startDate)
+        .filter((booking: any) => !endDate || booking.date <= endDate)
+        .filter((booking: any) => !mineOnly || String(booking.bookerEmail).toLowerCase() === req.user?.email.toLowerCase())
+        .sort((a: any, b: any) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+      res.json({ bookings });
+    } catch (error: any) {
+      console.error("Error fetching meeting bookings:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch meeting bookings" });
+    }
+  });
+
+  app.post("/api/meeting-bookings", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!scriptUrl) return res.json({ success: true, booking: { id: `MB${Date.now()}`, ...req.body }, source: 'mock' });
+
+    try {
+      const result = await postToAppsScript(scriptUrl, {
+        action: 'createMeetingBooking',
+        booking: {
+          roomId: req.body.roomId,
+          date: req.body.date,
+          startTime: req.body.startTime,
+          endTime: req.body.endTime,
+          purpose: req.body.purpose,
+          bookerEmail: req.user?.email,
+          bookerName: req.user?.name,
+          department: req.user?.dept
+        }
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error creating meeting booking:", error);
+      res.status(500).json({ error: error.message || "Failed to create meeting booking" });
+    }
+  });
+
+  app.post("/api/meeting-bookings/:bookingId/cancel", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!scriptUrl) return res.json({ success: true, source: 'mock' });
+
+    try {
+      const result = await postToAppsScript(scriptUrl, {
+        action: 'cancelMeetingBooking',
+        bookingId: req.params.bookingId,
+        cancelledBy: req.user?.email,
+        isAdmin: isAdminUser(req.user)
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error cancelling meeting booking:", error);
+      res.status(500).json({ error: error.message || "Failed to cancel meeting booking" });
     }
   });
 

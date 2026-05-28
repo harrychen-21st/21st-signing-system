@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle, FileSignature, LogOut, Search, Settings } from 'lucide-react';
+import { Building2, CalendarPlus, CheckCircle, FileSignature, LogOut, Search, Settings } from 'lucide-react';
 import SubmitForm from './SubmitForm';
 import ApproverDashboard from './ApproverDashboard';
 import AdminDashboard from './AdminDashboard';
 import TrackDashboard from './TrackDashboard';
 import LoginForm from './LoginForm';
+import MeetingRoomBooking from './MeetingRoomBooking';
+import MeetingRoomAdmin from './MeetingRoomAdmin';
 
-type TabKey = 'submit' | 'track' | 'approve' | 'admin';
+type TabKey = 'submit' | 'track' | 'meeting' | 'approve' | 'meetingAdmin' | 'admin';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -79,10 +81,20 @@ export default function App() {
             <Search className="w-5 h-5" />
             申請紀錄
           </button>
+          <button onClick={() => setActiveTab('meeting')} className={tabClass('meeting', 'bg-sky-600 shadow-sky-500/30')}>
+            <CalendarPlus className="w-5 h-5" />
+            會議室預約
+          </button>
           {showBackoffice && (
             <button onClick={() => setActiveTab('approve')} className={tabClass('approve', 'bg-emerald-600 shadow-emerald-500/30')}>
               <CheckCircle className="w-5 h-5" />
               後台處理區
+            </button>
+          )}
+          {showAdmin && (
+            <button onClick={() => setActiveTab('meetingAdmin')} className={tabClass('meetingAdmin', 'bg-violet-600 shadow-violet-500/30')}>
+              <Building2 className="w-5 h-5" />
+              會議室管理
             </button>
           )}
           {showAdmin && (
@@ -95,7 +107,9 @@ export default function App() {
 
         {activeTab === 'submit' && <SubmitForm user={user} />}
         {activeTab === 'track' && <TrackDashboard user={user} />}
+        {activeTab === 'meeting' && <MeetingRoomBooking user={user} />}
         {activeTab === 'approve' && <ApproverDashboard user={user} />}
+        {activeTab === 'meetingAdmin' && <MeetingRoomAdmin />}
         {activeTab === 'admin' && <AdminDashboard user={user} />}
 
         <div className="fixed bottom-6 right-6 bg-white/80 backdrop-blur-md shadow-lg border border-slate-200 p-3 rounded-2xl flex items-center gap-4 z-50 print:hidden">

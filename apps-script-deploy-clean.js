@@ -97,6 +97,18 @@ function doPost(e) {
       return json_(saveRules_(ss, payload));
     }
 
+    if (action === 'saveMeetingRoom') {
+      return json_(saveMeetingRoom_(ss, payload.room || {}));
+    }
+
+    if (action === 'createMeetingBooking') {
+      return json_(createMeetingBooking_(ss, payload.booking || {}));
+    }
+
+    if (action === 'cancelMeetingBooking') {
+      return json_(cancelMeetingBooking_(ss, payload.bookingId, payload.cancelledBy, payload.isAdmin));
+    }
+
     return json_({ success: false, error: 'Unknown POST action: ' + action });
   } catch (error) {
     return json_({ success: false, error: String(error) });
@@ -378,6 +390,240 @@ function sendApplicantSubmittedEmail_(params) {
   });
 }
 
+function saveMeetingRoom_(ss, room) {
+  var sheet = ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
+  var roomId = String(room.id || ('ROOM-' + new Date().getTime())).trim();
+  var now = new Date().toISOString();
+  var row = [
+    roomId,
+    String(room.name || '').trim(),
+    String(room.location || '').trim(),
+    String(room.capacity || '').trim(),
+    room.isActive === false ? 'FALSE' : 'TRUE',
+    String(room.sortOrder || '').trim(),
+    '09:00',
+    '18:00',
+    room.createdAt || now
+  ];
+  var rows = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || '') === roomId) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  if (rowIndex > 0) {
+    sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+  } else {
+    sheet.appendRow(row);
+  }
+  return { success: true, room: { id: roomId } };
+}
+
+function createMeetingBooking_(ss, booking) {
+  var roomsSheet = ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
+  var bookingsSheet = ensureSheet_(ss, 'MeetingBookings', ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt']);
+  var room = findMeetingRoom_(roomsSheet, booking.roomId);
+  if (!room) throw new Error('找不到會議室');
+  if (room.isActive !== 'TRUE') throw new Error('此會議室未上架');
+
+  var date = String(booking.date || '').trim();
+  var startTime = String(booking.startTime || '').trim();
+  var endTime = String(booking.endTime || '').trim();
+  var purpose = String(booking.purpose || '').trim();
+  if (!date || !startTime || !endTime || !purpose) throw new Error('會議室、日期、時間與用途皆為必填');
+
+  validateMeetingTime_(date, startTime, endTime);
+  if (hasMeetingConflict_(bookingsSheet, room.id, date, startTime, endTime, '')) {
+    throw new Error('此時段已被預約，請選擇其他時間');
+  }
+
+  var now = new Date();
+  var bookingId = 'MR' + Utilities.formatDate(now, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyyMMddHHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
+  var row = [
+    bookingId,
+    room.id,
+    room.name,
+    String(booking.bookerEmail || '').trim(),
+    String(booking.bookerName || '').trim(),
+    String(booking.department || '').trim(),
+    date,
+    startTime,
+    endTime,
+    purpose,
+    'Booked',
+    now.toISOString(),
+    now.toISOString(),
+    '',
+    '',
+    ''
+  ];
+  bookingsSheet.appendRow(row);
+  sendMeetingBookedEmail_(row);
+  return { success: true, booking: meetingBookingFromRow_(row) };
+}
+
+function cancelMeetingBooking_(ss, bookingId, cancelledBy, isAdmin) {
+  var sheet = ensureSheet_(ss, 'MeetingBookings', ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt']);
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || '') === String(bookingId || '')) {
+      var owner = String(rows[i][3] || '').trim().toLowerCase();
+      var actor = String(cancelledBy || '').trim().toLowerCase();
+      if (!isAdmin && owner !== actor) throw new Error('只能取消自己的預約');
+      var now = new Date().toISOString();
+      sheet.getRange(i + 1, 11).setValue('Cancelled');
+      sheet.getRange(i + 1, 13).setValue(now);
+      sheet.getRange(i + 1, 14).setValue(now);
+      sheet.getRange(i + 1, 15).setValue(cancelledBy || '');
+      sendMeetingCancelledEmail_(rows[i], cancelledBy);
+      return { success: true };
+    }
+  }
+  throw new Error('找不到預約紀錄');
+}
+
+function findMeetingRoom_(sheet, roomId) {
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || '') === String(roomId || '')) {
+      return {
+        id: rows[i][0],
+        name: rows[i][1],
+        location: rows[i][2],
+        capacity: rows[i][3],
+        isActive: String(rows[i][4] || '').toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE',
+        openTime: rows[i][6] || '09:00',
+        closeTime: rows[i][7] || '18:00'
+      };
+    }
+  }
+  return null;
+}
+
+function validateMeetingTime_(date, startTime, endTime) {
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
+  var maxDate = new Date();
+  maxDate.setDate(maxDate.getDate() + 30);
+  var maxDateText = Utilities.formatDate(maxDate, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
+  if (date < today) throw new Error('不能預約過去日期');
+  if (date > maxDateText) throw new Error('只能預約未來 30 天內的會議室');
+
+  var start = timeToMinutes_(startTime);
+  var end = timeToMinutes_(endTime);
+  if (start < 9 * 60 || end > 18 * 60) throw new Error('會議室開放時間為 09:00-18:00');
+  if (start >= end) throw new Error('結束時間必須晚於開始時間');
+  if (start % 30 !== 0 || end % 30 !== 0) throw new Error('預約時間需以 30 分鐘為單位');
+  if (end - start < 30) throw new Error('最短預約 30 分鐘');
+  if (end - start > 120) throw new Error('一次最多預約 2 小時');
+}
+
+function hasMeetingConflict_(sheet, roomId, date, startTime, endTime, ignoreBookingId) {
+  var rows = sheet.getDataRange().getValues();
+  var start = timeToMinutes_(startTime);
+  var end = timeToMinutes_(endTime);
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || '') === String(ignoreBookingId || '')) continue;
+    if (String(rows[i][1] || '') !== String(roomId || '')) continue;
+    if (String(rows[i][6] || '') !== String(date || '')) continue;
+    if (String(rows[i][10] || '') === 'Cancelled') continue;
+    var existingStart = timeToMinutes_(String(rows[i][7] || ''));
+    var existingEnd = timeToMinutes_(String(rows[i][8] || ''));
+    if (start < existingEnd && end > existingStart) return true;
+  }
+  return false;
+}
+
+function timeToMinutes_(timeText) {
+  var parts = String(timeText || '').split(':');
+  return Number(parts[0] || 0) * 60 + Number(parts[1] || 0);
+}
+
+function meetingBookingFromRow_(row) {
+  return {
+    id: row[0],
+    roomId: row[1],
+    roomName: row[2],
+    bookerEmail: row[3],
+    bookerName: row[4],
+    department: row[5],
+    date: row[6],
+    startTime: row[7],
+    endTime: row[8],
+    purpose: row[9],
+    status: row[10],
+    createdAt: row[11],
+    updatedAt: row[12],
+    cancelledAt: row[13],
+    cancelledBy: row[14],
+    reminderSentAt: row[15]
+  };
+}
+
+function googleCalendarUrl_(row) {
+  var start = String(row[6]).replace(/-/g, '') + 'T' + String(row[7]).replace(':', '') + '00';
+  var end = String(row[6]).replace(/-/g, '') + 'T' + String(row[8]).replace(':', '') + '00';
+  var title = encodeURIComponent(row[2] + ' 預約');
+  var details = encodeURIComponent('用途：' + row[9] + '\n預約單號：' + row[0]);
+  var location = encodeURIComponent(row[2]);
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + title + '&dates=' + start + '/' + end + '&details=' + details + '&location=' + location + '&ctz=Asia/Taipei';
+}
+
+function sendMeetingBookedEmail_(row) {
+  if (!row[3]) return;
+  safeSendEmail_({
+    to: row[3],
+    subject: '會議室預約成功 - ' + row[2] + ' ' + row[6] + ' ' + row[7],
+    body: [
+      (row[4] || '您好') + '，您的會議室預約已建立。',
+      '',
+      '預約單號：' + row[0],
+      '會議室：' + row[2],
+      '日期：' + row[6],
+      '時間：' + row[7] + '-' + row[8],
+      '用途：' + row[9],
+      '',
+      '加入 Google Calendar：',
+      googleCalendarUrl_(row)
+    ].join('\n'),
+    name: '21CD 內部申請系統'
+  });
+}
+
+function sendMeetingCancelledEmail_(row, cancelledBy) {
+  if (!row[3]) return;
+  safeSendEmail_({
+    to: row[3],
+    subject: '會議室預約已取消 - ' + row[2] + ' ' + row[6] + ' ' + row[7],
+    body: ['您的會議室預約已取消。', '', '預約單號：' + row[0], '會議室：' + row[2], '日期：' + row[6], '時間：' + row[7] + '-' + row[8], '取消人：' + (cancelledBy || '-')].join('\n'),
+    name: '21CD 內部申請系統'
+  });
+}
+
+function sendMeetingReminders() {
+  var ss = getSpreadsheet_();
+  var sheet = ensureSheet_(ss, 'MeetingBookings', ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt']);
+  var rows = sheet.getDataRange().getValues();
+  var now = new Date();
+  var tz = Session.getScriptTimeZone() || 'Asia/Taipei';
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][10] || '') !== 'Booked') continue;
+    if (rows[i][15]) continue;
+    var start = new Date(String(rows[i][6]) + 'T' + String(rows[i][7]) + ':00+08:00');
+    var minutes = (start.getTime() - now.getTime()) / 60000;
+    if (minutes >= 0 && minutes <= 10) {
+      safeSendEmail_({
+        to: rows[i][3],
+        subject: '會議室即將開始 - ' + rows[i][2] + ' ' + rows[i][7],
+        body: ['您的會議室預約即將開始。', '', '會議室：' + rows[i][2], '日期：' + rows[i][6], '時間：' + rows[i][7] + '-' + rows[i][8], '用途：' + rows[i][9]].join('\n'),
+        name: '21CD 內部申請系統'
+      });
+      sheet.getRange(i + 1, 16).setValue(Utilities.formatDate(now, tz, 'yyyy/MM/dd HH:mm:ss'));
+    }
+  }
+}
+
 function setupRealData() {
   var ss = getSpreadsheet_();
   ensureSheet_(ss, 'Users', ['Email', 'Name', 'Department', 'ManagerEmail', 'Roles']);
@@ -387,6 +633,8 @@ function setupRealData() {
   ensureSheet_(ss, 'WorkflowRules', ['RuleID', 'FormType', 'Stage', 'ConditionField', 'ConditionOp', 'ConditionVal', 'ApproverType', 'ApproverValue']);
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp']);
   ensureSheet_(ss, 'FormDefinitions', ['FormID', 'FieldsMarkdown', 'LogicMarkdown', 'ConfigJSON']);
+  ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
+  ensureSheet_(ss, 'MeetingBookings', ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt']);
   var settingsSheet = ensureSheet_(ss, 'SystemSettings', ['Key', 'Value']);
   setDefaultSetting_(settingsSheet, 'DEFAULT_COMPANY_CODE', '21CD');
   setDefaultSetting_(settingsSheet, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
