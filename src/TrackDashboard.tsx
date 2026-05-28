@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, User, ArrowRight, ListFilter, Printer, Edit3 } from 'lucide-react';
+import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, User, ArrowRight, ListFilter, Printer, Edit3, Search } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 interface AuditLog {
@@ -25,6 +25,28 @@ interface MyTicket {
   currentApprover: string;
   formData?: any;
   logs?: AuditLog[]; // We will load logs lazily
+}
+
+function matchesTicketSearch(ticket: MyTicket, query: string) {
+  const keyword = query.trim().toLowerCase();
+  if (!keyword) return true;
+
+  const searchableText = [
+    ticket.id,
+    ticket.createdAt,
+    ticket.applicantEmail,
+    ticket.applicantName,
+    ticket.dept,
+    ticket.formType,
+    ticket.subject,
+    ticket.amount,
+    ticket.status,
+    ticket.stage,
+    ticket.currentApprover,
+    ...Object.values(ticket.formData || {}).map((value) => String(value ?? '')),
+  ].join(' ').toLowerCase();
+
+  return searchableText.includes(keyword);
 }
 
 const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
@@ -144,6 +166,8 @@ export default function TrackDashboard({ user }: { user: any }) {
   const [editTicket, setEditTicket] = useState<MyTicket | null>(null);
   const [editFormData, setEditFormData] = useState<any>({});
   const [isResubmitting, setIsResubmitting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const filteredTickets = tickets.filter((ticket) => matchesTicketSearch(ticket, searchQuery));
 
   const handlePrint = (ticketId: string) => {
     setPrintingTicketId(ticketId);
@@ -282,6 +306,17 @@ export default function TrackDashboard({ user }: { user: any }) {
         </button>
       </div>
 
+      <div className="relative mb-8">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="搜尋單號、表單類型、主旨、狀態、金額或表單內容"
+          className="w-full bg-white/80 border border-slate-200 rounded-xl py-3 pl-12 pr-4 outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-500/10"
+        />
+      </div>
+
       {hasSearched && !isFetching && tickets.length === 0 && (
         <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-slate-200 border-dashed">
           <div className="w-16 h-16 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -292,12 +327,21 @@ export default function TrackDashboard({ user }: { user: any }) {
         </div>
       )}
 
-      {tickets.length > 0 && (
+      {hasSearched && !isFetching && tickets.length > 0 && filteredTickets.length === 0 && (
+        <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-slate-200 border-dashed">
+          <Search className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+          <h3 className="text-lg font-semibold text-slate-700 mb-1">找不到符合條件的申請紀錄</h3>
+          <p className="text-slate-500">請換一個關鍵字再試試看。</p>
+        </div>
+      )}
+
+      {filteredTickets.length > 0 && (
         <div className="space-y-4">
           <h3 className="font-bold text-slate-700 flex items-center gap-2">
-            共找到 {tickets.length} 筆歷史申請
+            共找到 {filteredTickets.length} 筆歷史申請
+            {searchQuery.trim() && <span className="text-sm font-medium text-slate-400">/ 原共 {tickets.length} 筆</span>}
           </h3>
-          {tickets.map(ticket => (
+          {filteredTickets.map(ticket => (
             <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl transition-all shadow-sm hover:shadow-md overflow-hidden">
                
                {/* Main Ticket Row */}

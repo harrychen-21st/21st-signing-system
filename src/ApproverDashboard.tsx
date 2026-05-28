@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle, FileText, Loader2, Mail, RefreshCw, ShieldCheck } from 'lucide-react';
+import { CheckCircle, FileText, Loader2, Mail, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 interface Ticket {
@@ -31,11 +31,33 @@ function valueOf(ticket: Ticket, key: string) {
   return value == null || value === '' ? '-' : String(value);
 }
 
+function matchesTicketSearch(ticket: Ticket, query: string) {
+  const keyword = query.trim().toLowerCase();
+  if (!keyword) return true;
+
+  const searchableText = [
+    ticket.id,
+    ticket.createdAt,
+    ticket.applicantEmail,
+    ticket.applicantName,
+    ticket.dept,
+    ticket.formType,
+    ticket.status,
+    statusLabels[ticket.status],
+    ticket.subject,
+    ticket.amount,
+    ...Object.values(ticket.formData || {}).map((value) => String(value ?? '')),
+  ].join(' ').toLowerCase();
+
+  return searchableText.includes(keyword);
+}
+
 export default function ApproverDashboard({ user }: { user: any }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [isFetching, setIsFetching] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [note, setNote] = useState<Record<string, string>>({});
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchTickets = async () => {
     setIsFetching(true);
@@ -51,6 +73,8 @@ export default function ApproverDashboard({ user }: { user: any }) {
       setIsFetching(false);
     }
   };
+
+  const filteredTickets = tickets.filter((ticket) => matchesTicketSearch(ticket, searchQuery));
 
   useEffect(() => {
     fetchTickets();
@@ -102,6 +126,17 @@ export default function ApproverDashboard({ user }: { user: any }) {
         <span className="font-semibold text-slate-700">{user.email}</span>
       </div>
 
+      <div className="relative mb-6">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="搜尋單號、表單類型、主旨、申請人、部門、統編或商家名稱"
+          className="w-full bg-white/80 border border-slate-200 rounded-xl py-3 pl-12 pr-4 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+        />
+      </div>
+
       {!isFetching && tickets.length === 0 && (
         <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-slate-200 border-dashed">
           <CheckCircle className="w-12 h-12 text-emerald-500 mx-auto mb-3" />
@@ -109,8 +144,16 @@ export default function ApproverDashboard({ user }: { user: any }) {
         </div>
       )}
 
+      {!isFetching && tickets.length > 0 && filteredTickets.length === 0 && (
+        <div className="text-center py-12 bg-slate-50/50 rounded-2xl border border-slate-200 border-dashed">
+          <Search className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+          <h3 className="text-lg font-semibold text-slate-700">找不到符合條件的資料</h3>
+          <p className="text-slate-500 mt-1">請換一個關鍵字再試試看。</p>
+        </div>
+      )}
+
       <div className="space-y-4">
-        {tickets.map((ticket) => (
+        {filteredTickets.map((ticket) => (
           <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
             <div className="flex flex-col lg:flex-row gap-6 justify-between">
               <div className="space-y-3 flex-1">
