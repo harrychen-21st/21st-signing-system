@@ -1,4 +1,6 @@
 var SPREADSHEET_ID_PROPERTY_KEY = 'SPREADSHEET_ID';
+var SYSTEM_SENDER_EMAIL = 'auto-reply@21stfintech.com';
+var SYSTEM_SENDER_NAME = '21CD 內部申請系統';
 
 function getSpreadsheet_() {
   var id = String(PropertiesService.getScriptProperties().getProperty(SPREADSHEET_ID_PROPERTY_KEY) || '').trim();
@@ -258,7 +260,7 @@ function completeTicket_(ss, ticketId, completedBy, note) {
     to: applicantEmail,
     subject: '申請已完成 - ' + ticketId,
     body: ['您的申請已完成。', '', '表單編號：' + ticketId, '主旨：' + (subject || '-'), '備註：' + (note || '-')].join('\n'),
-    name: '21CD 內部申請系統'
+    name: SYSTEM_SENDER_NAME
     });
   }
   return { id: ticketId, status: 'Completed' };
@@ -365,7 +367,7 @@ function sendInvestigationEmails_(ss, record, adminStatus, riskStatus) {
     to: recipients.join(','),
     subject: 'AML/關係人調查通知 - ' + record.applicationNumber,
     body: body,
-    name: '21CD 內部申請系統'
+    name: SYSTEM_SENDER_NAME
   });
 }
 
@@ -386,7 +388,7 @@ function sendApplicantSubmittedEmail_(params) {
     to: params.to,
     subject: '申請已送出 - ' + params.applicationNumber,
     body: body,
-    name: '21CD 內部申請系統'
+    name: SYSTEM_SENDER_NAME
   });
 }
 
@@ -628,7 +630,7 @@ function sendMeetingBookedEmail_(row) {
       '加入 Google Calendar：',
       googleCalendarUrl_(row)
     ].join('\n'),
-    name: '21CD 內部申請系統'
+    name: SYSTEM_SENDER_NAME
   });
 }
 
@@ -641,7 +643,7 @@ function sendMeetingCancelledEmail_(row, cancelledBy) {
     to: row[3],
     subject: '會議室預約已取消 - ' + row[2] + ' ' + bookingDate + ' ' + startTime,
     body: ['您的會議室預約已取消。', '', '預約單號：' + row[0], '會議室：' + row[2], '日期：' + bookingDate, '時間：' + startTime + '-' + endTime, '取消人：' + (cancelledBy || '-')].join('\n'),
-    name: '21CD 內部申請系統'
+    name: SYSTEM_SENDER_NAME
   });
 }
 
@@ -664,7 +666,7 @@ function sendMeetingReminders() {
         to: rows[i][3],
         subject: '會議室即將開始 - ' + rows[i][2] + ' ' + startTime,
         body: ['您的會議室預約即將開始。', '', '會議室：' + rows[i][2], '日期：' + bookingDate, '時間：' + startTime + '-' + endTime, '用途：' + rows[i][9]].join('\n'),
-        name: '21CD 內部申請系統'
+        name: SYSTEM_SENDER_NAME
       });
       sheet.getRange(i + 1, 16).setValue(Utilities.formatDate(now, tz, 'yyyy/MM/dd HH:mm:ss'));
     }
@@ -709,17 +711,28 @@ function ensureDefaultFormTypes_(sheet) {
 function authorizeMail() {
   var email = Session.getActiveUser().getEmail();
   if (!email) throw new Error('找不到目前登入者 Email，請確認使用 Google Workspace 帳號執行。');
-  MailApp.sendEmail({
-    to: email,
-    subject: '21CD 內部申請系統寄信授權測試',
-    body: '如果您收到這封信，代表 Apps Script 寄信權限已授權完成。',
-    name: '21CD 內部申請系統'
+  GmailApp.sendEmail(email, '21CD 內部申請系統寄信授權測試', '如果您收到這封信，代表 Apps Script 寄信權限已授權完成。', {
+    from: SYSTEM_SENDER_EMAIL,
+    name: SYSTEM_SENDER_NAME
   });
+}
+
+function getSenderStatus() {
+  var aliases = GmailApp.getAliases();
+  return {
+    senderEmail: SYSTEM_SENDER_EMAIL,
+    senderName: SYSTEM_SENDER_NAME,
+    aliases: aliases,
+    senderConfigured: aliases.indexOf(SYSTEM_SENDER_EMAIL) >= 0
+  };
 }
 
 function safeSendEmail_(message) {
   try {
-    MailApp.sendEmail(message);
+    GmailApp.sendEmail(String(message.to || ''), String(message.subject || ''), String(message.body || ''), {
+      from: SYSTEM_SENDER_EMAIL,
+      name: message.name || SYSTEM_SENDER_NAME
+    });
     return true;
   } catch (error) {
     Logger.log('Mail send skipped: ' + error);
