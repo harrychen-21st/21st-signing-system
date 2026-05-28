@@ -503,6 +503,9 @@ function findMeetingRoom_(sheet, roomId) {
 }
 
 function validateMeetingTime_(date, startTime, endTime) {
+  date = normalizeMeetingDate_(date);
+  startTime = normalizeMeetingTime_(startTime);
+  endTime = normalizeMeetingTime_(endTime);
   var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
   var maxDate = new Date();
   maxDate.setDate(maxDate.getDate() + 30);
@@ -521,22 +524,54 @@ function validateMeetingTime_(date, startTime, endTime) {
 
 function hasMeetingConflict_(sheet, roomId, date, startTime, endTime, ignoreBookingId) {
   var rows = sheet.getDataRange().getValues();
-  var start = timeToMinutes_(startTime);
-  var end = timeToMinutes_(endTime);
+  var targetDate = normalizeMeetingDate_(date);
+  var start = timeToMinutes_(normalizeMeetingTime_(startTime));
+  var end = timeToMinutes_(normalizeMeetingTime_(endTime));
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][0] || '') === String(ignoreBookingId || '')) continue;
     if (String(rows[i][1] || '') !== String(roomId || '')) continue;
-    if (String(rows[i][6] || '') !== String(date || '')) continue;
+    if (normalizeMeetingDate_(rows[i][6]) !== targetDate) continue;
     if (String(rows[i][10] || '') === 'Cancelled') continue;
-    var existingStart = timeToMinutes_(String(rows[i][7] || ''));
-    var existingEnd = timeToMinutes_(String(rows[i][8] || ''));
+    var existingStart = timeToMinutes_(normalizeMeetingTime_(rows[i][7]));
+    var existingEnd = timeToMinutes_(normalizeMeetingTime_(rows[i][8]));
     if (start < existingEnd && end > existingStart) return true;
   }
   return false;
 }
 
+function normalizeMeetingDate_(value) {
+  if (!value) return '';
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
+  }
+  var text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  var date = new Date(text);
+  if (!isNaN(date.getTime())) {
+    return Utilities.formatDate(date, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
+  }
+  return text;
+}
+
+function normalizeMeetingTime_(value) {
+  if (!value) return '';
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone() || 'Asia/Taipei', 'HH:mm');
+  }
+  var text = String(value).trim();
+  if (/^\d{1,2}:\d{2}/.test(text)) {
+    var parts = text.split(':');
+    return String(Number(parts[0])).padStart(2, '0') + ':' + parts[1].slice(0, 2);
+  }
+  var date = new Date(text);
+  if (!isNaN(date.getTime())) {
+    return Utilities.formatDate(date, Session.getScriptTimeZone() || 'Asia/Taipei', 'HH:mm');
+  }
+  return text;
+}
+
 function timeToMinutes_(timeText) {
-  var parts = String(timeText || '').split(':');
+  var parts = normalizeMeetingTime_(timeText).split(':');
   return Number(parts[0] || 0) * 60 + Number(parts[1] || 0);
 }
 
@@ -548,9 +583,9 @@ function meetingBookingFromRow_(row) {
     bookerEmail: row[3],
     bookerName: row[4],
     department: row[5],
-    date: row[6],
-    startTime: row[7],
-    endTime: row[8],
+    date: normalizeMeetingDate_(row[6]),
+    startTime: normalizeMeetingTime_(row[7]),
+    endTime: normalizeMeetingTime_(row[8]),
     purpose: row[9],
     status: row[10],
     createdAt: row[11],
@@ -562,8 +597,11 @@ function meetingBookingFromRow_(row) {
 }
 
 function googleCalendarUrl_(row) {
-  var start = String(row[6]).replace(/-/g, '') + 'T' + String(row[7]).replace(':', '') + '00';
-  var end = String(row[6]).replace(/-/g, '') + 'T' + String(row[8]).replace(':', '') + '00';
+  var bookingDate = normalizeMeetingDate_(row[6]);
+  var startTime = normalizeMeetingTime_(row[7]);
+  var endTime = normalizeMeetingTime_(row[8]);
+  var start = bookingDate.replace(/-/g, '') + 'T' + startTime.replace(':', '') + '00';
+  var end = bookingDate.replace(/-/g, '') + 'T' + endTime.replace(':', '') + '00';
   var title = encodeURIComponent(row[2] + ' 預約');
   var details = encodeURIComponent('用途：' + row[9] + '\n預約單號：' + row[0]);
   var location = encodeURIComponent(row[2]);
@@ -572,16 +610,19 @@ function googleCalendarUrl_(row) {
 
 function sendMeetingBookedEmail_(row) {
   if (!row[3]) return;
+  var bookingDate = normalizeMeetingDate_(row[6]);
+  var startTime = normalizeMeetingTime_(row[7]);
+  var endTime = normalizeMeetingTime_(row[8]);
   safeSendEmail_({
     to: row[3],
-    subject: '會議室預約成功 - ' + row[2] + ' ' + row[6] + ' ' + row[7],
+    subject: '會議室預約成功 - ' + row[2] + ' ' + bookingDate + ' ' + startTime,
     body: [
       (row[4] || '您好') + '，您的會議室預約已建立。',
       '',
       '預約單號：' + row[0],
       '會議室：' + row[2],
-      '日期：' + row[6],
-      '時間：' + row[7] + '-' + row[8],
+      '日期：' + bookingDate,
+      '時間：' + startTime + '-' + endTime,
       '用途：' + row[9],
       '',
       '加入 Google Calendar：',
@@ -593,10 +634,13 @@ function sendMeetingBookedEmail_(row) {
 
 function sendMeetingCancelledEmail_(row, cancelledBy) {
   if (!row[3]) return;
+  var bookingDate = normalizeMeetingDate_(row[6]);
+  var startTime = normalizeMeetingTime_(row[7]);
+  var endTime = normalizeMeetingTime_(row[8]);
   safeSendEmail_({
     to: row[3],
-    subject: '會議室預約已取消 - ' + row[2] + ' ' + row[6] + ' ' + row[7],
-    body: ['您的會議室預約已取消。', '', '預約單號：' + row[0], '會議室：' + row[2], '日期：' + row[6], '時間：' + row[7] + '-' + row[8], '取消人：' + (cancelledBy || '-')].join('\n'),
+    subject: '會議室預約已取消 - ' + row[2] + ' ' + bookingDate + ' ' + startTime,
+    body: ['您的會議室預約已取消。', '', '預約單號：' + row[0], '會議室：' + row[2], '日期：' + bookingDate, '時間：' + startTime + '-' + endTime, '取消人：' + (cancelledBy || '-')].join('\n'),
     name: '21CD 內部申請系統'
   });
 }
@@ -610,13 +654,16 @@ function sendMeetingReminders() {
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][10] || '') !== 'Booked') continue;
     if (rows[i][15]) continue;
-    var start = new Date(String(rows[i][6]) + 'T' + String(rows[i][7]) + ':00+08:00');
+    var bookingDate = normalizeMeetingDate_(rows[i][6]);
+    var startTime = normalizeMeetingTime_(rows[i][7]);
+    var endTime = normalizeMeetingTime_(rows[i][8]);
+    var start = new Date(bookingDate + 'T' + startTime + ':00+08:00');
     var minutes = (start.getTime() - now.getTime()) / 60000;
     if (minutes >= 0 && minutes <= 10) {
       safeSendEmail_({
         to: rows[i][3],
-        subject: '會議室即將開始 - ' + rows[i][2] + ' ' + rows[i][7],
-        body: ['您的會議室預約即將開始。', '', '會議室：' + rows[i][2], '日期：' + rows[i][6], '時間：' + rows[i][7] + '-' + rows[i][8], '用途：' + rows[i][9]].join('\n'),
+        subject: '會議室即將開始 - ' + rows[i][2] + ' ' + startTime,
+        body: ['您的會議室預約即將開始。', '', '會議室：' + rows[i][2], '日期：' + bookingDate, '時間：' + startTime + '-' + endTime, '用途：' + rows[i][9]].join('\n'),
         name: '21CD 內部申請系統'
       });
       sheet.getRange(i + 1, 16).setValue(Utilities.formatDate(now, tz, 'yyyy/MM/dd HH:mm:ss'));

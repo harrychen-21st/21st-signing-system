@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarPlus, CheckCircle, Clock, ExternalLink, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { CalendarPlus, CheckCircle, Clock, DoorOpen, ExternalLink, Loader2, RefreshCw, Trash2, Users } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 type MeetingRoom = {
@@ -33,7 +33,8 @@ const timeSlots = Array.from({ length: 18 }, (_, index) => {
 });
 
 function todayText() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function addDaysText(days: number) {
@@ -56,6 +57,10 @@ function overlaps(booking: MeetingBooking, slot: string) {
   const slotStart = timeToMinutes(slot);
   const slotEnd = slotStart + 30;
   return timeToMinutes(booking.startTime) < slotEnd && timeToMinutes(booking.endTime) > slotStart;
+}
+
+function bookingOverlapsRange(booking: MeetingBooking, rangeStart: string, rangeEnd: string) {
+  return timeToMinutes(booking.startTime) < timeToMinutes(rangeEnd) && timeToMinutes(booking.endTime) > timeToMinutes(rangeStart);
 }
 
 function googleCalendarUrl(booking: MeetingBooking) {
@@ -88,22 +93,37 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
   const selectedRoom = activeRooms.find((room) => room.id === roomId);
   const endTime = addMinutes(startTime, durationMinutes);
   const myBookings = bookings.filter((booking) => booking.bookerEmail?.toLowerCase() === user.email?.toLowerCase());
+  const selectedRangeOutOfHours = timeToMinutes(endTime) > 18 * 60;
+  const selectedRangeBlocked = bookings.some(
+    (booking) => booking.roomId === roomId && bookingOverlapsRange(booking, startTime, endTime)
+  );
+  const bookedSlotCount = activeRooms.reduce(
+    (count, room) => count + timeSlots.filter((slot) => bookings.some((booking) => booking.roomId === room.id && overlaps(booking, slot))).length,
+    0
+  );
+  const availableSlotCount = activeRooms.length * timeSlots.length - bookedSlotCount;
 
-  const loadData = async () => {
+  const loadRooms = async () => {
+    const response = await authFetch('/api/meeting-rooms');
+    const data = await response.json();
+    const nextRooms = data.rooms || [];
+    setRooms(nextRooms);
+    if (!roomId && nextRooms.length) {
+      const firstActive = nextRooms.find((room: MeetingRoom) => room.isActive);
+      if (firstActive) setRoomId(firstActive.id);
+    }
+  };
+
+  const loadBookings = async () => {
+    const response = await authFetch(`/api/meeting-bookings?startDate=${selectedDate}&endDate=${selectedDate}`);
+    const data = await response.json();
+    setBookings(data.bookings || []);
+  };
+
+  const loadData = async (includeRooms = false) => {
     setIsLoading(true);
     try {
-      const [roomsResponse, bookingsResponse] = await Promise.all([
-        authFetch('/api/meeting-rooms'),
-        authFetch(`/api/meeting-bookings?startDate=${selectedDate}&endDate=${selectedDate}`),
-      ]);
-      const roomsData = await roomsResponse.json();
-      const bookingsData = await bookingsResponse.json();
-      setRooms(roomsData.rooms || []);
-      setBookings(bookingsData.bookings || []);
-      if (!roomId && roomsData.rooms?.length) {
-        const firstActive = roomsData.rooms.find((room: MeetingRoom) => room.isActive);
-        if (firstActive) setRoomId(firstActive.id);
-      }
+      await (includeRooms || !rooms.length ? Promise.all([loadRooms(), loadBookings()]) : loadBookings());
     } catch (error) {
       console.error('Failed to load meeting data', error);
       alert('無法讀取會議室資料，請稍後再試。');
@@ -119,6 +139,14 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
   const createBooking = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!roomId || !purpose.trim()) return;
+    if (selectedRangeOutOfHours) {
+      alert('會議室開放時間到 18:00，請縮短使用時間或提早開始。');
+      return;
+    }
+    if (selectedRangeBlocked) {
+      alert('這個時段已經有人預約，請選擇其他時間。');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const response = await authFetch('/api/meeting-bookings', {
@@ -129,7 +157,11 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || '預約失敗');
       setPurpose('');
-      await loadData();
+      if (data.booking) {
+        setBookings((current) => [...current, data.booking]);
+      } else {
+        await loadBookings();
+      }
       alert('會議室預約成功。');
     } catch (error: any) {
       alert(error.message || '預約失敗，請稍後再試。');
@@ -144,7 +176,7 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
       const response = await authFetch(`/api/meeting-bookings/${bookingId}/cancel`, { method: 'POST' });
       const data = await response.json();
       if (!response.ok || !data.success) throw new Error(data.error || '取消失敗');
-      await loadData();
+      setBookings((current) => current.filter((booking) => booking.id !== bookingId));
     } catch (error: any) {
       alert(error.message || '取消失敗，請稍後再試。');
     }
@@ -170,7 +202,7 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
             className="bg-white/80 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-sky-500"
           />
           <button
-            onClick={loadData}
+            onClick={() => loadData(true)}
             disabled={isLoading}
             className="bg-slate-900 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-semibold flex items-center gap-2 disabled:opacity-70"
           >
@@ -180,22 +212,41 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+        <div className="rounded-2xl border border-sky-100 bg-sky-50 px-5 py-4">
+          <div className="text-xs font-bold text-sky-700 mb-1">開放時間</div>
+          <div className="flex items-center gap-2 text-xl font-black text-slate-900"><Clock className="w-5 h-5 text-sky-500" />09:00-18:00</div>
+        </div>
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-5 py-4">
+          <div className="text-xs font-bold text-emerald-700 mb-1">可預約時段</div>
+          <div className="flex items-center gap-2 text-xl font-black text-slate-900"><DoorOpen className="w-5 h-5 text-emerald-500" />{availableSlotCount} 格</div>
+        </div>
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 px-5 py-4">
+          <div className="text-xs font-bold text-amber-700 mb-1">已預約時段</div>
+          <div className="flex items-center gap-2 text-xl font-black text-slate-900"><Users className="w-5 h-5 text-amber-500" />{bookedSlotCount} 格</div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-3xl border border-slate-200 bg-white shadow-sm mb-8">
         <div className="min-w-[980px]">
-          <div className="grid grid-cols-[140px_repeat(18,1fr)] bg-slate-100 text-[11px] font-bold text-slate-500">
-            <div className="p-3 border-r border-slate-200">會議室</div>
+          <div className="grid grid-cols-[170px_repeat(18,1fr)] bg-gradient-to-r from-slate-900 via-sky-800 to-emerald-700 text-[11px] font-bold text-white">
+            <div className="p-3 border-r border-white/10">會議室</div>
             {timeSlots.map((slot) => (
-              <div key={slot} className="p-2 text-center border-r border-slate-200 last:border-r-0">{slot}</div>
+              <div key={slot} className="p-2 text-center border-r border-white/10 last:border-r-0">{slot}</div>
             ))}
           </div>
-          {activeRooms.map((room) => (
-            <div key={room.id} className="grid grid-cols-[140px_repeat(18,1fr)] border-t border-slate-200">
-              <div className="p-3 border-r border-slate-200 font-bold text-slate-800">
+          {activeRooms.map((room, roomIndex) => (
+            <div key={room.id} className="grid grid-cols-[170px_repeat(18,1fr)] border-t border-slate-200">
+              <div className={`p-4 border-r border-slate-200 font-bold text-slate-800 ${roomIndex % 2 ? 'bg-slate-50' : 'bg-white'}`}>
                 {room.name}
-                {room.capacity && <div className="text-xs font-medium text-slate-400">{room.capacity} 人</div>}
+                <div className="mt-1 flex items-center gap-2 text-xs font-medium text-slate-500">
+                  <Users className="w-3.5 h-3.5" />
+                  {room.capacity ? `${room.capacity} 人` : '未設定人數'}
+                </div>
               </div>
               {timeSlots.map((slot) => {
                 const booked = bookings.some((booking) => booking.roomId === room.id && overlaps(booking, slot));
+                const selected = roomId === room.id && startTime === slot;
                 return (
                   <button
                     key={slot}
@@ -204,9 +255,9 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
                       setRoomId(room.id);
                       setStartTime(slot);
                     }}
-                    className={`h-14 border-r border-slate-100 text-xs transition-colors ${
-                      booked ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-white hover:bg-sky-50 text-sky-700'
-                    } ${roomId === room.id && startTime === slot ? 'ring-2 ring-inset ring-sky-500' : ''}`}
+                    className={`h-16 border-r border-slate-100 text-xs font-semibold transition-all ${
+                      booked ? 'bg-gradient-to-br from-amber-100 to-rose-100 text-amber-800 cursor-not-allowed' : 'bg-white hover:bg-sky-50 text-sky-700'
+                    } ${selected ? 'ring-2 ring-inset ring-sky-500 bg-sky-50' : ''}`}
                     disabled={booked}
                   >
                     {booked ? '已預約' : ''}
@@ -235,7 +286,11 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
             <label className="space-y-2">
               <span className="text-sm font-semibold text-slate-700">開始時間</span>
               <select value={startTime} onChange={(event) => setStartTime(event.target.value)} className="form-input !pl-4">
-                {timeSlots.map((slot) => <option key={slot} value={slot}>{slot}</option>)}
+                {timeSlots.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slot}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="space-y-2">
@@ -254,11 +309,21 @@ export default function MeetingRoomBooking({ user }: { user: any }) {
               </div>
             </div>
           </div>
+          {selectedRangeOutOfHours && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+              會議室開放時間到 18:00，請縮短使用時間或提早開始。
+            </div>
+          )}
+          {selectedRangeBlocked && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              這個時段已有預約，請更換會議室或時間。
+            </div>
+          )}
           <label className="block space-y-2">
             <span className="text-sm font-semibold text-slate-700">用途</span>
             <textarea value={purpose} onChange={(event) => setPurpose(event.target.value)} rows={4} required className="form-input !pl-4" />
           </label>
-          <button disabled={isSubmitting || !activeRooms.length} className="w-full bg-sky-600 hover:bg-sky-500 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-60">
+          <button disabled={isSubmitting || !activeRooms.length || selectedRangeBlocked || selectedRangeOutOfHours} className="w-full bg-sky-600 hover:bg-sky-500 text-white px-5 py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-60">
             {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
             送出預約
           </button>
