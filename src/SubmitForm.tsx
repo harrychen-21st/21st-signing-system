@@ -21,6 +21,7 @@ type FormDefinition = {
 type SubmittedTicket = {
   id: string;
   formType: string;
+  formTypeName?: string;
   subject: string;
   applicantName: string;
   applicantEmail: string;
@@ -112,6 +113,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const hiddenPrintFields = new Set(['ALWAYS', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email']);
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
   const signers = ['董事長', '總經理', '管理本部長', '單位本部長', '單位處主管', '申請人'];
+  const formTypeDisplay = ticket.formTypeName || ticket.formType;
   const needsAdminCountersign = ticket.formData.external_collab === '是';
   const isSealApplication = ticket.formType === 'CS';
   const countersignUnitText = isSealApplication ? '管理處(法務)：請提供法務簽核或Email紀錄' : '';
@@ -127,7 +129,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
           <div className="shrink-0 rounded-md border border-slate-300 px-4 py-2 text-right leading-6">
             <div className="text-slate-500">表單編號</div>
             <div className="font-mono text-base font-bold text-slate-950">{ticket.id}</div>
-            <div className="mt-1 text-slate-500">表單類型 <span className="font-semibold text-slate-800">{ticket.formType}</span></div>
+            <div className="mt-1 text-slate-500">表單類型 <span className="font-semibold text-slate-800">{formTypeDisplay}</span></div>
           </div>
         </div>
       </header>
@@ -308,6 +310,7 @@ export default function SubmitForm({ user }: { user: any }) {
     const subject =
       String(dynamicData.subject || '').trim() ||
       `${formTypesData.find((form) => form.id === formType)?.name || formType} - ${user.name}`;
+    const formTypeName = formTypesData.find((form) => form.id === formType)?.name || formType;
     const amount = dynamicData.amount ? String(dynamicData.amount) : '';
 
     try {
@@ -328,6 +331,7 @@ export default function SubmitForm({ user }: { user: any }) {
       setSubmittedTicket({
         id: result.generatedIds?.[0] || result.applicationNumber,
         formType,
+        formTypeName,
         subject,
         applicantName: user.name,
         applicantEmail: user.email,
