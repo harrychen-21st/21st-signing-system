@@ -1,5 +1,4 @@
 import express, { Request, Response, NextFunction } from "express";
-import path from "path";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 
@@ -1504,10 +1503,11 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const path = await import("path");
+    const distPath = path.default.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(path.default.join(distPath, 'index.html'));
     });
   }
 

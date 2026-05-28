@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createApp } from '../server';
+import type { Express } from 'express';
 
-const appPromise = createApp();
+let appPromise: Promise<Express> | null = null;
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
+  appPromise ||= createApp();
   const app = await appPromise;
 
   if (req.url) {
