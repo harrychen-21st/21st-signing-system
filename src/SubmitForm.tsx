@@ -113,6 +113,8 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
   const signers = ['董事長', '總經理', '管理本部長', '單位本部長', '單位處主管', '申請人'];
   const needsAdminCountersign = ticket.formData.external_collab === '是';
+  const isSealApplication = ticket.formType === 'CS';
+  const countersignUnitText = isSealApplication ? '管理處(法務)：請提供法務簽核或Email紀錄' : '';
 
   return (
     <div className="print-page hidden print:block bg-white text-slate-950 text-[12px] leading-relaxed">
@@ -168,7 +170,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
         <h2 className="mb-2 text-sm font-bold text-slate-900">會簽紀錄</h2>
         <div className="grid grid-cols-[96px_1fr] overflow-hidden rounded-md border border-slate-300">
           <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">會簽單位</div>
-          <div className="px-3 py-2 min-h-8"></div>
+          <div className="px-3 py-2 min-h-8 font-semibold text-slate-900">{countersignUnitText}</div>
           <div className="border-r border-t border-slate-300 bg-slate-100 px-3 py-2 font-semibold">簽核與日期</div>
           <div className="border-t border-slate-300 px-3 py-2 min-h-10"></div>
         </div>
