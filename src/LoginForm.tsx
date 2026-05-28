@@ -30,7 +30,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
       }
       
       if (!res.ok || !data.success) {
-        throw new Error(data.error || '登入失敗');
+        throw new Error(data.error || `登入失敗 (${res.status})`);
       }
 
       localStorage.setItem('jwt', data.token);
