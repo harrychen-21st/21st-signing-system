@@ -124,12 +124,12 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-500">21CD Internal Request</p>
-            <h1 className="mt-1 text-2xl font-bold tracking-wide text-slate-950">二十一世紀數位 內部申請單</h1>
+            <h1 className="mt-1 text-2xl font-bold tracking-wide text-slate-950">二十一世紀數位科技</h1>
+            <p className="mt-1 text-sm font-semibold text-slate-700">{formTypeDisplay}</p>
           </div>
           <div className="shrink-0 rounded-md border border-slate-300 px-4 py-2 text-right leading-6">
             <div className="text-slate-500">表單編號</div>
             <div className="font-mono text-base font-bold text-slate-950">{ticket.id}</div>
-            <div className="mt-1 text-slate-500">表單類型 <span className="font-semibold text-slate-800">{formTypeDisplay}</span></div>
           </div>
         </div>
       </header>
