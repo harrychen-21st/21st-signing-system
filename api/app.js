@@ -63,6 +63,27 @@ const rowToObject = (headers, row) => headers.reduce((record, header, index) => 
   record[header] = row[index] ?? "";
   return record;
 }, {});
+const normalizeDateCell = (value) => {
+  if (!value) return "";
+  const text = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" });
+};
+const normalizeTimeCell = (value) => {
+  if (!value) return "";
+  const text = String(value);
+  if (/^\d{2}:\d{2}$/.test(text)) return text;
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleTimeString("en-GB", {
+    timeZone: "Asia/Taipei",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+};
 const mapMeetingRoom = (row) => {
   const item = rowToObject(meetingRoomHeaders, row);
   return {
@@ -72,8 +93,8 @@ const mapMeetingRoom = (row) => {
     capacity: item.Capacity,
     isActive: String(item.IsActive || "").toUpperCase() !== "FALSE",
     sortOrder: Number(item.SortOrder || 0),
-    openTime: item.OpenTime || "09:00",
-    closeTime: item.CloseTime || "18:00",
+    openTime: normalizeTimeCell(item.OpenTime) || "09:00",
+    closeTime: normalizeTimeCell(item.CloseTime) || "18:00",
     createdAt: item.CreatedAt
   };
 };
@@ -86,9 +107,9 @@ const mapMeetingBooking = (row) => {
     bookerEmail: item.BookerEmail,
     bookerName: item.BookerName,
     department: item.Department,
-    date: item.Date,
-    startTime: item.StartTime,
-    endTime: item.EndTime,
+    date: normalizeDateCell(item.Date),
+    startTime: normalizeTimeCell(item.StartTime),
+    endTime: normalizeTimeCell(item.EndTime),
     purpose: item.Purpose,
     status: item.Status || "Booked",
     createdAt: item.CreatedAt,
