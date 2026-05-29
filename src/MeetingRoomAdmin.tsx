@@ -111,7 +111,9 @@ export default function MeetingRoomAdmin() {
       alert(data.error || '更新失敗');
       return;
     }
-    await loadData();
+    setRooms((current) => current.map((item) => (
+      item.id === room.id ? { ...item, isActive: !room.isActive } : item
+    )));
   };
 
   const cancelBooking = async (bookingId: string) => {

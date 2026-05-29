@@ -114,6 +114,11 @@ const normalizeTimeCell = (value: any) => {
   });
 };
 
+const parseActiveFlag = (value: any) => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return !['FALSE', '0', 'NO', 'N', '停用', '否'].includes(normalized);
+};
+
 const mapMeetingRoom = (row: any[]) => {
   const item = rowToObject(meetingRoomHeaders, row);
   return {
@@ -121,7 +126,7 @@ const mapMeetingRoom = (row: any[]) => {
     name: item.RoomName,
     location: item.Location,
     capacity: item.Capacity,
-    isActive: String(item.IsActive || '').toUpperCase() !== 'FALSE',
+    isActive: parseActiveFlag(item.IsActive),
     sortOrder: Number(item.SortOrder || 0),
     openTime: normalizeTimeCell(item.OpenTime) || '09:00',
     closeTime: normalizeTimeCell(item.CloseTime) || '18:00',
@@ -1424,7 +1429,7 @@ graph TD
           name: roomName,
           location: String(req.body.location || '').trim(),
           capacity: String(req.body.capacity || '').trim(),
-          isActive: req.body.isActive !== false,
+          isActive: parseActiveFlag(req.body.isActive),
           sortOrder: String(req.body.sortOrder || ''),
           openTime: '09:00',
           closeTime: '18:00',

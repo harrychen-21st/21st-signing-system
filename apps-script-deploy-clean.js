@@ -396,12 +396,13 @@ function saveMeetingRoom_(ss, room) {
   var sheet = ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
   var roomId = String(room.id || ('ROOM-' + new Date().getTime())).trim();
   var now = new Date().toISOString();
+  var isActive = parseActiveFlag_(room.isActive);
   var row = [
     roomId,
     String(room.name || '').trim(),
     String(room.location || '').trim(),
     String(room.capacity || '').trim(),
-    room.isActive === false ? 'FALSE' : 'TRUE',
+    isActive ? 'TRUE' : 'FALSE',
     String(room.sortOrder || '').trim(),
     '09:00',
     '18:00',
@@ -420,7 +421,7 @@ function saveMeetingRoom_(ss, room) {
   } else {
     sheet.appendRow(row);
   }
-  return { success: true, room: { id: roomId } };
+  return { success: true, room: { id: roomId, isActive: isActive } };
 }
 
 function createMeetingBooking_(ss, booking) {
@@ -495,7 +496,7 @@ function findMeetingRoom_(sheet, roomId) {
         name: rows[i][1],
         location: rows[i][2],
         capacity: rows[i][3],
-        isActive: String(rows[i][4] || '').toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE',
+        isActive: parseActiveFlag_(rows[i][4]) ? 'TRUE' : 'FALSE',
         openTime: rows[i][6] || '09:00',
         closeTime: rows[i][7] || '18:00'
       };
@@ -570,6 +571,11 @@ function normalizeMeetingTime_(value) {
     return Utilities.formatDate(date, Session.getScriptTimeZone() || 'Asia/Taipei', 'HH:mm');
   }
   return text;
+}
+
+function parseActiveFlag_(value) {
+  var normalized = String(value == null ? '' : value).trim().toUpperCase();
+  return ['FALSE', '0', 'NO', 'N', '停用', '否'].indexOf(normalized) < 0;
 }
 
 function timeToMinutes_(timeText) {
