@@ -55,7 +55,6 @@ const fieldLabels: Record<string, string> = {
   description: '內容說明',
   attachment: '附件',
   related_ticket: '相關單號',
-  expense_category: '支出科目',
   amount: '金額',
   vendor_name: '廠商名稱',
   payment_date: '付款期限',
@@ -115,7 +114,7 @@ function isLongPrintField(key: string) {
 }
 
 function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
-  const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email']);
+  const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email', 'expense_category']);
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
   const signers = ['董事長', '總經理', '管理本部長', '單位本部長', '單位處主管', '申請人'];
   const formTypeDisplay = ticket.formTypeName || ticket.formType;

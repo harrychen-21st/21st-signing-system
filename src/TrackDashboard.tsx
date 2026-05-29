@@ -27,6 +27,8 @@ interface MyTicket {
   logs?: AuditLog[]; // We will load logs lazily
 }
 
+const hiddenFormFields = new Set(['ALWAYS', 'expense_category']);
+
 function matchesTicketSearch(ticket: MyTicket, query: string) {
   const keyword = query.trim().toLowerCase();
   if (!keyword) return true;
@@ -50,7 +52,7 @@ function matchesTicketSearch(ticket: MyTicket, query: string) {
 }
 
 const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
-  const formFields = Object.entries(ticket.formData || {}).filter(([k]) => k !== 'ALWAYS');
+  const formFields = Object.entries(ticket.formData || {}).filter(([k]) => !hiddenFormFields.has(k));
   
   // A mapping to translate some known field keys to readable labels if we want, mostly they will show their real values
   const getLabel = (key: string) => {
@@ -472,7 +474,7 @@ export default function TrackDashboard({ user }: { user: any }) {
                   />
                 </div>
               )}
-              {Object.entries(editFormData).filter(([k]) => k !== 'ALWAYS' && k !== 'amount').map(([key, val]) => (
+              {Object.entries(editFormData).filter(([k]) => !hiddenFormFields.has(k) && k !== 'amount').map(([key, val]) => (
                 <div key={key}>
                   <label className="block text-slate-700 font-semibold mb-1">{key}</label>
                   <textarea 

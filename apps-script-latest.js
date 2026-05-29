@@ -691,7 +691,6 @@ function setupRealData() {
   var rdConfig = {
     fields: [
       { id: "related_ticket", label: "相關單號 (搭配請/採購單號)", type: "text", required: false },
-      { id: "expense_category", label: "支出科目", type: "text", required: true },
       { id: "amount", label: "請款金額", type: "number", required: true },
       { id: "external_collab", label: "是否涉及外部合作廠商", type: "select", options: ["否", "是"], required: true },
       { id: "vendor_name", label: "廠商名稱", type: "text", required: true, showIf: { field: "external_collab", value: "否" } },

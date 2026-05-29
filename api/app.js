@@ -422,7 +422,6 @@ graph TD
 | \u6B04\u4F4D ID | \u6B04\u4F4D\u540D\u7A31 | \u6B04\u4F4D\u578B\u614B | \u5FC5\u586B | \u8AAA\u660E/\u52D5\u614B\u986F\u793A\u689D\u4EF6 |
 | :--- | :--- | :--- | :--- | :--- |
 | **related_ticket** | \u76F8\u95DC\u55AE\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F\u4F7F\u7528\uFF0C\u4FBF\u65BC\u52FE\u7A3D |
-| **expense_category** | \u652F\u51FA\u79D1\u76EE | \u55AE\u884C\u6587\u5B57 | \u662F | \u4F8B\u5982\uFF1A\u5DEE\u65C5\u8CBB\u3001\u5EE3\u544A\u8CBB\u3001\u90F5\u96FB\u8CBB\u7B49 |
 | **amount** | \u8ACB\u6B3E\u91D1\u984D | \u6578\u503C | \u662F | \u672C\u6B21\u8ACB\u6B3E\u4E4B\u5BE6\u969B\u65B0\u53F0\u5E63\u91D1\u984D |
 | **external_collab** | \u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u662F\u300D\u6216\u300C\u5426\u300D |
 | **vendor_name** | \u5EE0\u5546\u540D\u7A31 | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u70BA\u300C\u5426\u300D\u6642\u986F\u793A |
@@ -459,7 +458,6 @@ graph TD
         configJSON: {
           fields: [
             { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F)", type: "text", required: false },
-            { id: "expense_category", label: "\u652F\u51FA\u79D1\u76EE", type: "text", required: true },
             { id: "amount", label: "\u8ACB\u6B3E\u91D1\u984D", type: "number", required: true },
             { id: "external_collab", label: "\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546", type: "select", options: ["\u5426", "\u662F"], required: true },
             { id: "vendor_name", label: "\u5EE0\u5546\u540D\u7A31", type: "text", required: true, showIf: { field: "external_collab", value: "\u5426" } },
@@ -547,10 +545,11 @@ graph TD
       const merged = fetchedDefinitions.map((def) => {
         const local = localDefinitions.find((l) => l.formId === def.formId);
         if (local) {
+          const forceLocalDefinition = def.formId === "RD";
           return {
             ...def,
-            fieldsMarkdown: def.fieldsMarkdown && def.fieldsMarkdown.trim() ? def.fieldsMarkdown : local.fieldsMarkdown,
-            logicMarkdown: def.logicMarkdown && def.logicMarkdown.trim() ? def.logicMarkdown : local.logicMarkdown,
+            fieldsMarkdown: forceLocalDefinition ? local.fieldsMarkdown : def.fieldsMarkdown && def.fieldsMarkdown.trim() ? def.fieldsMarkdown : local.fieldsMarkdown,
+            logicMarkdown: forceLocalDefinition ? local.logicMarkdown : def.logicMarkdown && def.logicMarkdown.trim() ? def.logicMarkdown : local.logicMarkdown,
             configJSON: local.configJSON
           };
         }

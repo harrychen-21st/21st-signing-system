@@ -507,7 +507,6 @@ graph TD
 | 欄位 ID | 欄位名稱 | 欄位型態 | 必填 | 說明/動態顯示條件 |
 | :--- | :--- | :--- | :--- | :--- |
 | **related_ticket** | 相關單號 | 單行文字 | 否 | 搭配請/採購單號使用，便於勾稽 |
-| **expense_category** | 支出科目 | 單行文字 | 是 | 例如：差旅費、廣告費、郵電費等 |
 | **amount** | 請款金額 | 數值 | 是 | 本次請款之實際新台幣金額 |
 | **external_collab** | 是否涉及外部合作廠商 | 下拉選單 | 是 | 可選擇「是」或「否」 |
 | **vendor_name** | 廠商名稱 | 單行文字 | 是 | 當「是否涉及外部合作廠商」為「否」時顯示 |
@@ -544,7 +543,6 @@ graph TD
         configJSON: {
           fields: [
             { id: "related_ticket", label: "相關單號 (搭配請/採購單號)", type: "text", required: false },
-            { id: "expense_category", label: "支出科目", type: "text", required: true },
             { id: "amount", label: "請款金額", type: "number", required: true },
             { id: "external_collab", label: "是否涉及外部合作廠商", type: "select", options: ["否", "是"], required: true },
             { id: "vendor_name", label: "廠商名稱", type: "text", required: true, showIf: { field: "external_collab", value: "否" } },
@@ -636,10 +634,11 @@ graph TD
       const merged = fetchedDefinitions.map((def: any) => {
         const local = localDefinitions.find(l => l.formId === def.formId);
         if (local) {
+          const forceLocalDefinition = def.formId === 'RD';
           return {
             ...def,
-            fieldsMarkdown: (def.fieldsMarkdown && def.fieldsMarkdown.trim()) ? def.fieldsMarkdown : local.fieldsMarkdown,
-            logicMarkdown: (def.logicMarkdown && def.logicMarkdown.trim()) ? def.logicMarkdown : local.logicMarkdown,
+            fieldsMarkdown: forceLocalDefinition ? local.fieldsMarkdown : ((def.fieldsMarkdown && def.fieldsMarkdown.trim()) ? def.fieldsMarkdown : local.fieldsMarkdown),
+            logicMarkdown: forceLocalDefinition ? local.logicMarkdown : ((def.logicMarkdown && def.logicMarkdown.trim()) ? def.logicMarkdown : local.logicMarkdown),
             configJSON: local.configJSON
           };
         }
