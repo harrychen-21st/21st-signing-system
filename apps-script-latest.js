@@ -269,7 +269,19 @@ function doPost(e) {
       var formName = payload.formName;
       var sheet = ss.getSheetByName("FormTypes");
       if (!sheet) return createJsonResponse({ success: false, error: "FormTypes sheet not found" });
-      sheet.appendRow([formId, formName]);
+      var rows = sheet.getDataRange().getValues();
+      var targetRow = -1;
+      for (var i = 1; i < rows.length; i++) {
+        if (String(rows[i][0] || '').trim() === String(formId || '').trim()) {
+          targetRow = i + 1;
+          break;
+        }
+      }
+      if (targetRow > 0) {
+        sheet.getRange(targetRow, 1, 1, 2).setValues([[formId, formName]]);
+      } else {
+        sheet.appendRow([formId, formName]);
+      }
       return createJsonResponse({ success: true });
     }
 

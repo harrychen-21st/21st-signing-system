@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
+import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
@@ -84,6 +85,42 @@ const meetingRoomHeaders = ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsAct
 const meetingBookingHeaders = ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt'];
 
 const isAdminUser = (user?: { roles?: string[] }) => user?.roles?.includes('ROLE:ADMIN');
+
+const allowedGeneratedFieldTypes = new Set(['text', 'number', 'date', 'select', 'textarea']);
+
+const normalizeGeneratedFormId = (value: string) => String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+
+const normalizeGeneratedFields = (fields: any[] = []) => {
+  return fields
+    .map((field) => {
+      const id = String(field?.id || '').trim().replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+      const type = allowedGeneratedFieldTypes.has(String(field?.type || 'text')) ? String(field.type) : 'text';
+      const normalized: any = {
+        id,
+        label: String(field?.label || id).trim(),
+        type,
+        required: field?.required !== false
+      };
+      if (type === 'select') {
+        normalized.options = Array.isArray(field?.options) ? field.options.map((option: any) => String(option).trim()).filter(Boolean) : [];
+        if (!normalized.options.length) normalized.options = ['是', '否'];
+      }
+      return normalized;
+    })
+    .filter((field) => field.id && field.label);
+};
+
+const normalizeGeneratedRules = (rules: any[] = []) => {
+  return rules.map((rule, index) => ({
+    id: String(rule?.id || `rule-${Date.now()}-${index}`),
+    stage: Number(rule?.stage || index + 1),
+    conditionField: String(rule?.conditionField || 'ALWAYS'),
+    conditionOp: String(rule?.conditionOp || '=='),
+    conditionVal: String(rule?.conditionVal || 'TRUE'),
+    approverType: ['HIERARCHY', 'ROLE', 'DEPT'].includes(String(rule?.approverType)) ? String(rule.approverType) : 'ROLE',
+    approverValue: String(rule?.approverValue || 'ROLE:ADMIN')
+  }));
+};
 
 const rowToObject = (headers: string[], row: any[]) =>
   headers.reduce((record: Record<string, any>, header, index) => {
@@ -401,6 +438,100 @@ export async function createApp() {
     } catch (error: any) {
       console.error("Error saving setting:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/ai-form-model", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+
+    const formName = String(req.body.formName || '').trim();
+    const formId = normalizeGeneratedFormId(req.body.formId || '');
+    const requirement = String(req.body.requirement || '').trim();
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!formName || !formId || !requirement) {
+      return res.status(400).json({ error: "請填寫完整表單名稱、縮寫代號與需求內容" });
+    }
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+      return res.status(500).json({ error: "尚未設定 GEMINI_API_KEY，請先到 Vercel Environment Variables 設定。" });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const prompt = `你是一個企業內部申請系統的表單規格顧問。
+
+平台背景：
+- 這是 21CD 內部申請系統，目前流程是申請人填單、產生單號、寄信、列印申請單、後台人員完成結案。
+- 不是線上主管簽核系統，所以請不要設計主管逐關核准語句。
+- 所有表單都會由系統額外支援「是否涉及外部合作廠商」及統編/AML 資料欄位，除非使用者明確要求，請避免重複產生 ext_tax_id、ext_company_name、ext_company_owner。
+- 欄位 id 請使用英文小寫與底線，欄位型態只能使用 text、number、date、select、textarea。
+
+表單名稱：${formName}
+表單代號：${formId}
+需求描述：${requirement}
+
+請嚴格回傳 JSON，內容必須包含：
+1. fields: 欄位陣列，每個欄位包含 id、label、type、options、required。
+2. rules: 後台處理提示規則陣列，每筆包含 stage、conditionField、conditionOp、conditionVal、approverType、approverValue。若沒有特殊後台角色，請給一筆 ROLE:ADMIN。
+3. fieldsMarkdown: 給管理員看的 Markdown 欄位清單說明。
+4. logicMarkdown: 給管理員看的 Markdown 後台處理流程說明。`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              fields: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    label: { type: Type.STRING },
+                    type: { type: Type.STRING },
+                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    required: { type: Type.BOOLEAN }
+                  }
+                }
+              },
+              rules: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    stage: { type: Type.NUMBER },
+                    conditionField: { type: Type.STRING },
+                    conditionOp: { type: Type.STRING },
+                    conditionVal: { type: Type.STRING },
+                    approverType: { type: Type.STRING },
+                    approverValue: { type: Type.STRING }
+                  }
+                }
+              },
+              fieldsMarkdown: { type: Type.STRING },
+              logicMarkdown: { type: Type.STRING }
+            }
+          }
+        }
+      });
+
+      const raw = JSON.parse(response.text || '{}');
+      const fields = normalizeGeneratedFields(raw.fields);
+      if (!fields.length) throw new Error("AI 未產生可用欄位，請補充需求後再試一次。");
+
+      res.json({
+        formId,
+        fieldsMarkdown: String(raw.fieldsMarkdown || ''),
+        logicMarkdown: String(raw.logicMarkdown || ''),
+        fields,
+        rules: normalizeGeneratedRules(raw.rules)
+      });
+    } catch (error: any) {
+      console.error("Error generating AI form model:", error);
+      res.status(500).json({ error: error.message || "AI 產生表單規格失敗" });
     }
   });
   

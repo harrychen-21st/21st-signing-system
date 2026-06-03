@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Plus, Trash2, Save, AlertCircle, GitMerge, Shield, Loader2, X, Sparkles, FileText, Code, Edit3, ChevronRight, Check, FileSignature, Megaphone } from 'lucide-react';
-import { GoogleGenAI, Type } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { authFetch } from './authFetch';
@@ -132,57 +131,28 @@ export default function AdminDashboard({ user }: { user: any }) {
         throw new Error('請填寫完整表單名稱、縮寫代號與需求內容');
       }
 
-      // 取得 API Key 的安全寫法
-      const apiKey = (process as any).env?.GEMINI_API_KEY || (window as any).process?.env?.GEMINI_API_KEY;
-      
-      if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-        throw new Error('尚未偵測到 GEMINI_API_KEY。請點擊左側「Settings (齒輪)」->「Secrets」進行設定。');
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `你是一個專業的企業流程與系統架構顧問。
-      任務：將使用者的自然語言描述轉換為結構化的表單規格。
-      表單名稱: ${newFormName}
-      表單代號: ${newFormId}
-      需求描述: ${aiPrompt}
-
-      請嚴格回傳 JSON 格式，內容必須包含：
-      1. fields: 欄位陣列 (id, label, type [text, number, date, select, textarea], options [陣列, 僅 select 用], required [boolean])
-      2. rules: 簽核規則陣列 (stage, conditionField [若為必經關卡填 ALWAYS], conditionOp [==, >, <, IN], conditionVal, approverType [HIERARCHY, ROLE], approverValue [1~5 或 ROLE:CODE])
-      3. fieldsMarkdown: 給人類看的 Markdown 欄位清單說明
-      4. logicMarkdown: 給人類看的 Markdown 簽核路徑說明
-      `;
-
-      // 使用 2.0 Flash 或是 1.5 Pro 都可以，這裡使用 instructions 推薦的最佳型號
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              fields: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { id: { type: Type.STRING }, label: { type: Type.STRING }, type: { type: Type.STRING }, options: { type: Type.ARRAY, items: { type: Type.STRING } }, required: { type: Type.BOOLEAN } } } },
-              rules: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { stage: { type: Type.NUMBER }, conditionField: { type: Type.STRING }, conditionOp: { type: Type.STRING }, conditionVal: { type: Type.STRING }, approverType: { type: Type.STRING }, approverValue: { type: Type.STRING } } } },
-              fieldsMarkdown: { type: Type.STRING },
-              logicMarkdown: { type: Type.STRING }
-            }
-          }
-        }
+      const response = await authFetch('/api/ai-form-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formName: newFormName,
+          formId: newFormId,
+          requirement: aiPrompt
+        })
       });
-
-      const result = JSON.parse(response.text);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'AI 產生過程中發生異常。');
       setTempSpecs({
-        formId: newFormId.toUpperCase(),
+        formId: result.formId,
         fieldsMarkdown: result.fieldsMarkdown,
         logicMarkdown: result.logicMarkdown,
         configJSON: { fields: result.fields }
       });
-      setTempRules(result.rules.map((r: any, idx: number) => ({ ...r, id: `ai-${Date.now()}-${idx}` })));
+      setTempRules((result.rules || []).map((r: any, idx: number) => ({ ...r, id: r.id || `ai-${Date.now()}-${idx}` })));
       
     } catch (error: any) {
       console.error("AI Generation Error:", error);
-      alert(error.message || 'AI 產生過程中發生異常，請確認 API Key 是否設定正確。');
+      alert(error.message || 'AI 產生過程中發生異常，請確認 GEMINI_API_KEY 是否設定正確。');
     } finally {
       setIsGenerating(false);
     }
@@ -192,21 +162,22 @@ export default function AdminDashboard({ user }: { user: any }) {
     if (!tempSpecs) return;
     setIsSaving(true);
     try {
+      const formId = tempSpecs.formId;
       // 1. Create Form Type
       await authFetch('/api/form-types', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: newFormId.toUpperCase(), name: newFormName })
+        body: JSON.stringify({ id: formId, name: newFormName })
       });
 
       // 2. Sync Specs and Rules
       await Promise.all([
-        authFetch(`/api/rules/${newFormId.toUpperCase()}`, {
+        authFetch(`/api/rules/${formId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules: tempRules })
         }),
-        authFetch(`/api/form-definitions/${newFormId.toUpperCase()}`, {
+        authFetch(`/api/form-definitions/${formId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(tempSpecs)
@@ -215,7 +186,7 @@ export default function AdminDashboard({ user }: { user: any }) {
 
       alert('新表單已成功建立，並已同步到「原有表單」清單中！');
       setMainMode('A');
-      setActiveFormId(newFormId.toUpperCase());
+      setActiveFormId(formId);
       setTempSpecs(null);
       setNewFormName('');
       setNewFormId('');
@@ -522,7 +493,7 @@ export default function AdminDashboard({ user }: { user: any }) {
                       {isSaving ? <Loader2 className="animate-spin w-10 h-10" /> : <Save size={40} className="group-hover:rotate-12 transition-transform" />}
                       確認規劃並一鍵建立系統
                     </button>
-                    <p className="text-center text-slate-400 font-bold text-sm tracking-wide">按下按鈕後，系統將自動配置 API 路由、資料庫欄位映射與簽核角色權限。</p>
+                    <p className="text-center text-slate-400 font-bold text-sm tracking-wide">按下按鈕後，系統會建立表單類型、欄位設定與後台處理提示；正式啟用前建議再檢查列印內容與權限需求。</p>
                  </div>
                )}
             </div>

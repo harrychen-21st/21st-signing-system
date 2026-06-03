@@ -31,6 +31,12 @@ function doGet(e) {
       return json_({ success: true, data: sheet.getDataRange().getValues() });
     }
 
+    if (action === 'getFormTypes') {
+      var formSheet = ensureSheet_(ss, 'FormTypes', ['FormID', 'FormName']);
+      ensureDefaultFormTypes_(formSheet);
+      return json_({ success: true, data: formSheet.getDataRange().getValues() });
+    }
+
     if (action === 'getRules') {
       var ruleSheet = ss.getSheetByName('WorkflowRules');
       if (!ruleSheet) return json_({ success: false, error: 'WorkflowRules sheet not found' });
@@ -91,7 +97,12 @@ function doPost(e) {
 
     if (action === 'addFormType') {
       var formSheet = ensureSheet_(ss, 'FormTypes', ['FormID', 'FormName']);
-      formSheet.appendRow([payload.formId, payload.formName]);
+      saveData_(ss, {
+        sheet: 'FormTypes',
+        matchColumn: 1,
+        matchValue: payload.formId,
+        row: [payload.formId, payload.formName]
+      });
       return json_({ success: true });
     }
 

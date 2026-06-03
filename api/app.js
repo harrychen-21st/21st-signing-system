@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
+import { GoogleGenAI, Type } from "@google/genai";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 const JWT_SECRET = process.env.JWT_SECRET || "fallback-secret-key";
@@ -59,6 +60,36 @@ const defaultFormTypes = [
 const meetingRoomHeaders = ["RoomID", "RoomName", "Location", "Capacity", "IsActive", "SortOrder", "OpenTime", "CloseTime", "CreatedAt"];
 const meetingBookingHeaders = ["BookingID", "RoomID", "RoomName", "BookerEmail", "BookerName", "Department", "Date", "StartTime", "EndTime", "Purpose", "Status", "CreatedAt", "UpdatedAt", "CancelledAt", "CancelledBy", "ReminderSentAt"];
 const isAdminUser = (user) => user?.roles?.includes("ROLE:ADMIN");
+const allowedGeneratedFieldTypes = /* @__PURE__ */ new Set(["text", "number", "date", "select", "textarea"]);
+const normalizeGeneratedFormId = (value) => String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+const normalizeGeneratedFields = (fields = []) => {
+  return fields.map((field) => {
+    const id = String(field?.id || "").trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
+    const type = allowedGeneratedFieldTypes.has(String(field?.type || "text")) ? String(field.type) : "text";
+    const normalized = {
+      id,
+      label: String(field?.label || id).trim(),
+      type,
+      required: field?.required !== false
+    };
+    if (type === "select") {
+      normalized.options = Array.isArray(field?.options) ? field.options.map((option) => String(option).trim()).filter(Boolean) : [];
+      if (!normalized.options.length) normalized.options = ["\u662F", "\u5426"];
+    }
+    return normalized;
+  }).filter((field) => field.id && field.label);
+};
+const normalizeGeneratedRules = (rules = []) => {
+  return rules.map((rule, index) => ({
+    id: String(rule?.id || `rule-${Date.now()}-${index}`),
+    stage: Number(rule?.stage || index + 1),
+    conditionField: String(rule?.conditionField || "ALWAYS"),
+    conditionOp: String(rule?.conditionOp || "=="),
+    conditionVal: String(rule?.conditionVal || "TRUE"),
+    approverType: ["HIERARCHY", "ROLE", "DEPT"].includes(String(rule?.approverType)) ? String(rule.approverType) : "ROLE",
+    approverValue: String(rule?.approverValue || "ROLE:ADMIN")
+  }));
+};
 const rowToObject = (headers, row) => headers.reduce((record, header, index) => {
   record[header] = row[index] ?? "";
   return record;
@@ -323,6 +354,93 @@ async function createApp() {
     } catch (error) {
       console.error("Error saving setting:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+  app.post("/api/ai-form-model", authMiddleware, async (req, res) => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+    const formName = String(req.body.formName || "").trim();
+    const formId = normalizeGeneratedFormId(req.body.formId || "");
+    const requirement = String(req.body.requirement || "").trim();
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!formName || !formId || !requirement) {
+      return res.status(400).json({ error: "\u8ACB\u586B\u5BEB\u5B8C\u6574\u8868\u55AE\u540D\u7A31\u3001\u7E2E\u5BEB\u4EE3\u865F\u8207\u9700\u6C42\u5167\u5BB9" });
+    }
+    if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+      return res.status(500).json({ error: "\u5C1A\u672A\u8A2D\u5B9A GEMINI_API_KEY\uFF0C\u8ACB\u5148\u5230 Vercel Environment Variables \u8A2D\u5B9A\u3002" });
+    }
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const prompt = `\u4F60\u662F\u4E00\u500B\u4F01\u696D\u5167\u90E8\u7533\u8ACB\u7CFB\u7D71\u7684\u8868\u55AE\u898F\u683C\u9867\u554F\u3002
+
+\u5E73\u53F0\u80CC\u666F\uFF1A
+- \u9019\u662F 21CD \u5167\u90E8\u7533\u8ACB\u7CFB\u7D71\uFF0C\u76EE\u524D\u6D41\u7A0B\u662F\u7533\u8ACB\u4EBA\u586B\u55AE\u3001\u7522\u751F\u55AE\u865F\u3001\u5BC4\u4FE1\u3001\u5217\u5370\u7533\u8ACB\u55AE\u3001\u5F8C\u53F0\u4EBA\u54E1\u5B8C\u6210\u7D50\u6848\u3002
+- \u4E0D\u662F\u7DDA\u4E0A\u4E3B\u7BA1\u7C3D\u6838\u7CFB\u7D71\uFF0C\u6240\u4EE5\u8ACB\u4E0D\u8981\u8A2D\u8A08\u4E3B\u7BA1\u9010\u95DC\u6838\u51C6\u8A9E\u53E5\u3002
+- \u6240\u6709\u8868\u55AE\u90FD\u6703\u7531\u7CFB\u7D71\u984D\u5916\u652F\u63F4\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u53CA\u7D71\u7DE8/AML \u8CC7\u6599\u6B04\u4F4D\uFF0C\u9664\u975E\u4F7F\u7528\u8005\u660E\u78BA\u8981\u6C42\uFF0C\u8ACB\u907F\u514D\u91CD\u8907\u7522\u751F ext_tax_id\u3001ext_company_name\u3001ext_company_owner\u3002
+- \u6B04\u4F4D id \u8ACB\u4F7F\u7528\u82F1\u6587\u5C0F\u5BEB\u8207\u5E95\u7DDA\uFF0C\u6B04\u4F4D\u578B\u614B\u53EA\u80FD\u4F7F\u7528 text\u3001number\u3001date\u3001select\u3001textarea\u3002
+
+\u8868\u55AE\u540D\u7A31\uFF1A${formName}
+\u8868\u55AE\u4EE3\u865F\uFF1A${formId}
+\u9700\u6C42\u63CF\u8FF0\uFF1A${requirement}
+
+\u8ACB\u56B4\u683C\u56DE\u50B3 JSON\uFF0C\u5167\u5BB9\u5FC5\u9808\u5305\u542B\uFF1A
+1. fields: \u6B04\u4F4D\u9663\u5217\uFF0C\u6BCF\u500B\u6B04\u4F4D\u5305\u542B id\u3001label\u3001type\u3001options\u3001required\u3002
+2. rules: \u5F8C\u53F0\u8655\u7406\u63D0\u793A\u898F\u5247\u9663\u5217\uFF0C\u6BCF\u7B46\u5305\u542B stage\u3001conditionField\u3001conditionOp\u3001conditionVal\u3001approverType\u3001approverValue\u3002\u82E5\u6C92\u6709\u7279\u6B8A\u5F8C\u53F0\u89D2\u8272\uFF0C\u8ACB\u7D66\u4E00\u7B46 ROLE:ADMIN\u3002
+3. fieldsMarkdown: \u7D66\u7BA1\u7406\u54E1\u770B\u7684 Markdown \u6B04\u4F4D\u6E05\u55AE\u8AAA\u660E\u3002
+4. logicMarkdown: \u7D66\u7BA1\u7406\u54E1\u770B\u7684 Markdown \u5F8C\u53F0\u8655\u7406\u6D41\u7A0B\u8AAA\u660E\u3002`;
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              fields: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    label: { type: Type.STRING },
+                    type: { type: Type.STRING },
+                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    required: { type: Type.BOOLEAN }
+                  }
+                }
+              },
+              rules: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    stage: { type: Type.NUMBER },
+                    conditionField: { type: Type.STRING },
+                    conditionOp: { type: Type.STRING },
+                    conditionVal: { type: Type.STRING },
+                    approverType: { type: Type.STRING },
+                    approverValue: { type: Type.STRING }
+                  }
+                }
+              },
+              fieldsMarkdown: { type: Type.STRING },
+              logicMarkdown: { type: Type.STRING }
+            }
+          }
+        }
+      });
+      const raw = JSON.parse(response.text || "{}");
+      const fields = normalizeGeneratedFields(raw.fields);
+      if (!fields.length) throw new Error("AI \u672A\u7522\u751F\u53EF\u7528\u6B04\u4F4D\uFF0C\u8ACB\u88DC\u5145\u9700\u6C42\u5F8C\u518D\u8A66\u4E00\u6B21\u3002");
+      res.json({
+        formId,
+        fieldsMarkdown: String(raw.fieldsMarkdown || ""),
+        logicMarkdown: String(raw.logicMarkdown || ""),
+        fields,
+        rules: normalizeGeneratedRules(raw.rules)
+      });
+    } catch (error) {
+      console.error("Error generating AI form model:", error);
+      res.status(500).json({ error: error.message || "AI \u7522\u751F\u8868\u55AE\u898F\u683C\u5931\u6557" });
     }
   });
   app.get("/api/form-types", authMiddleware, async (req, res) => {
