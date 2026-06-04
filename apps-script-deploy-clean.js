@@ -307,9 +307,11 @@ function syncAmlInvestigation_(ss, record) {
   }
 
   var previous = findPreviousAmlRecord_(amlSheet, record.taxId);
-  var adminStatus = previous && previous.adminStatus === '已調查' ? '已調查' : '已通知待調查';
-  var riskStatus = previous && previous.riskStatus === '已調查' ? '已調查' : '已通知待調查';
+  var adminStatus = previous && previous.adminStatus ? previous.adminStatus : '待通知';
+  var riskStatus = previous && previous.riskStatus ? previous.riskStatus : '待通知';
   var needsInvestigation = adminStatus !== '已調查' || riskStatus !== '已調查';
+  var shouldNotifyAdmin = needsAmlNotification_(adminStatus);
+  var shouldNotifyRisk = needsAmlNotification_(riskStatus);
 
   var headers = amlSheet.getDataRange().getValues()[0];
   var rowByHeader = {
@@ -331,9 +333,28 @@ function syncAmlInvestigation_(ss, record) {
     return rowByHeader[normalizeHeader_(header)] || rowByHeader[String(header).trim()] || '';
   });
   amlSheet.appendRow(row);
+  var appendedRow = amlSheet.getLastRow();
 
-  if (needsInvestigation) sendInvestigationEmails_(ss, record, adminStatus, riskStatus);
+  if (needsInvestigation && (shouldNotifyAdmin || shouldNotifyRisk)) {
+    var notificationResult = sendInvestigationEmails_(ss, record, shouldNotifyAdmin, shouldNotifyRisk);
+    var nextStatus = notificationResult.sent ? '已通知待調查' : (notificationResult.skipped ? '通知失敗已結束' : '通知失敗待重送');
+    updateAmlNotificationStatus_(amlSheet, appendedRow, headers, shouldNotifyAdmin ? nextStatus : adminStatus, shouldNotifyRisk ? nextStatus : riskStatus);
+    adminStatus = shouldNotifyAdmin ? nextStatus : adminStatus;
+    riskStatus = shouldNotifyRisk ? nextStatus : riskStatus;
+  }
   return { needsInvestigation: needsInvestigation, adminStatus: adminStatus, riskStatus: riskStatus };
+}
+
+function needsAmlNotification_(status) {
+  var normalized = String(status || '').trim();
+  if (!normalized) return true;
+  return ['待通知', '通知失敗'].indexOf(normalized) >= 0;
+}
+
+function updateAmlNotificationStatus_(sheet, rowIndex, headers, adminStatus, riskStatus) {
+  var indexes = mapHeaderIndexes_(headers);
+  if (indexes['通知管理處查詢'] != null) sheet.getRange(rowIndex, indexes['通知管理處查詢'] + 1).setValue(adminStatus);
+  if (indexes['通知風控查詢'] != null) sheet.getRange(rowIndex, indexes['通知風控查詢'] + 1).setValue(riskStatus);
 }
 
 function findPreviousAmlRecord_(sheet, taxId) {
@@ -354,11 +375,11 @@ function findPreviousAmlRecord_(sheet, taxId) {
   return null;
 }
 
-function sendInvestigationEmails_(ss, record, adminStatus, riskStatus) {
-  var adminEmails = adminStatus === '已調查' ? [] : parseEmailList_(getSetting_(ss, 'ADMIN_CHECK_EMAILS', ''));
-  var riskEmails = riskStatus === '已調查' ? [] : parseEmailList_(getSetting_(ss, 'RISK_CHECK_EMAILS', ''));
+function sendInvestigationEmails_(ss, record, notifyAdmin, notifyRisk) {
+  var adminEmails = notifyAdmin ? parseEmailList_(getSetting_(ss, 'ADMIN_CHECK_EMAILS', '')) : [];
+  var riskEmails = notifyRisk ? parseEmailList_(getSetting_(ss, 'RISK_CHECK_EMAILS', '')) : [];
   var recipients = adminEmails.concat(riskEmails);
-  if (!recipients.length) return;
+  if (!recipients.length) return { sent: false, skipped: true };
 
   var body = [
     '請協助進行 AML / 關係人調查。',
@@ -374,12 +395,14 @@ function sendInvestigationEmails_(ss, record, adminStatus, riskStatus) {
     '請至 AML/關係人調查 Google Sheet 完成調查後，將狀態調整為「已調查」。'
   ].join('\n');
 
-  safeSendEmail_({
+  var sent = safeSendEmail_({
     to: recipients.join(','),
     subject: 'AML/關係人調查通知 - ' + record.applicationNumber,
     body: body,
-    name: SYSTEM_SENDER_NAME
+    name: SYSTEM_SENDER_NAME,
+    retryKey: 'AML:' + record.taxId + ':' + record.applicationNumber
   });
+  return { sent: sent };
 }
 
 function sendApplicantSubmittedEmail_(params) {
@@ -701,6 +724,7 @@ function setupRealData() {
   ensureSheet_(ss, 'FormDefinitions', ['FormID', 'FieldsMarkdown', 'LogicMarkdown', 'ConfigJSON']);
   ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
   ensureSheet_(ss, 'MeetingBookings', ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt']);
+  ensureSheet_(ss, 'MailRetryQueue', ['RetryKey', 'To', 'Subject', 'Body', 'Name', 'Attempts', 'NextAttemptAt', 'Status', 'LastError', 'CreatedAt', 'UpdatedAt']);
   var settingsSheet = ensureSheet_(ss, 'SystemSettings', ['Key', 'Value']);
   setDefaultSetting_(settingsSheet, 'DEFAULT_COMPANY_CODE', '21CD');
   setDefaultSetting_(settingsSheet, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
@@ -753,8 +777,106 @@ function safeSendEmail_(message) {
     return true;
   } catch (error) {
     Logger.log('Mail send skipped: ' + error);
+    enqueueMailRetry_(message, error);
     return false;
   }
+}
+
+function enqueueMailRetry_(message, error) {
+  var ss = getSpreadsheet_();
+  var sheet = ensureSheet_(ss, 'MailRetryQueue', ['RetryKey', 'To', 'Subject', 'Body', 'Name', 'Attempts', 'NextAttemptAt', 'Status', 'LastError', 'CreatedAt', 'UpdatedAt']);
+  var now = new Date();
+  var nextAttemptAt = new Date(now.getTime() + 2 * 60 * 1000);
+  var retryKey = String(message.retryKey || [message.to, message.subject].join('|')).trim();
+  var rows = sheet.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0] || '') === retryKey && String(rows[i][7] || '') === 'PendingRetry') {
+      sheet.getRange(i + 1, 9).setValue(String(error));
+      sheet.getRange(i + 1, 11).setValue(now.toISOString());
+      return;
+    }
+  }
+  sheet.appendRow([
+    retryKey,
+    String(message.to || ''),
+    String(message.subject || ''),
+    String(message.body || ''),
+    String(message.name || SYSTEM_SENDER_NAME),
+    1,
+    nextAttemptAt.toISOString(),
+    'PendingRetry',
+    String(error),
+    now.toISOString(),
+    now.toISOString()
+  ]);
+}
+
+function processMailRetryQueue() {
+  var ss = getSpreadsheet_();
+  var sheet = ensureSheet_(ss, 'MailRetryQueue', ['RetryKey', 'To', 'Subject', 'Body', 'Name', 'Attempts', 'NextAttemptAt', 'Status', 'LastError', 'CreatedAt', 'UpdatedAt']);
+  var rows = sheet.getDataRange().getValues();
+  var now = new Date();
+  for (var i = 1; i < rows.length; i++) {
+    var status = String(rows[i][7] || '');
+    var attempts = Number(rows[i][5] || 0);
+    var nextAttemptAt = new Date(String(rows[i][6] || ''));
+    if (status !== 'PendingRetry') continue;
+    if (attempts >= 2) continue;
+    if (isNaN(nextAttemptAt.getTime()) || nextAttemptAt.getTime() > now.getTime()) continue;
+
+    try {
+      GmailApp.sendEmail(String(rows[i][1] || ''), String(rows[i][2] || ''), String(rows[i][3] || ''), {
+        from: SYSTEM_SENDER_EMAIL,
+        name: String(rows[i][4] || SYSTEM_SENDER_NAME)
+      });
+      sheet.getRange(i + 1, 6).setValue(2);
+      sheet.getRange(i + 1, 8).setValue('RetrySucceeded');
+      sheet.getRange(i + 1, 9).setValue('');
+      sheet.getRange(i + 1, 11).setValue(now.toISOString());
+      finalizeMailRetryContext_(ss, String(rows[i][0] || ''), true);
+    } catch (error) {
+      sheet.getRange(i + 1, 6).setValue(2);
+      sheet.getRange(i + 1, 8).setValue('RetryFailedFinal');
+      sheet.getRange(i + 1, 9).setValue(String(error));
+      sheet.getRange(i + 1, 11).setValue(now.toISOString());
+      finalizeMailRetryContext_(ss, String(rows[i][0] || ''), false);
+    }
+  }
+}
+
+function finalizeMailRetryContext_(ss, retryKey, succeeded) {
+  if (retryKey.indexOf('AML:') !== 0) return;
+  var parts = retryKey.split(':');
+  var applicationNumber = parts[2] || '';
+  if (!applicationNumber) return;
+  var amlSheetId = getSetting_(ss, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
+  var sheet = SpreadsheetApp.openById(amlSheetId).getSheets()[0];
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return;
+  var indexes = mapHeaderIndexes_(rows[0]);
+  var ticketIndex = indexes['表單編號'];
+  if (ticketIndex == null) return;
+  var nextStatus = succeeded ? '已通知待調查' : '通知失敗已結束';
+  for (var i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][ticketIndex] || '') !== applicationNumber) continue;
+    if (indexes['通知管理處查詢'] != null && String(rows[i][indexes['通知管理處查詢']] || '') === '通知失敗待重送') {
+      sheet.getRange(i + 1, indexes['通知管理處查詢'] + 1).setValue(nextStatus);
+    }
+    if (indexes['通知風控查詢'] != null && String(rows[i][indexes['通知風控查詢']] || '') === '通知失敗待重送') {
+      sheet.getRange(i + 1, indexes['通知風控查詢'] + 1).setValue(nextStatus);
+    }
+    break;
+  }
+}
+
+function setupMailRetryTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'processMailRetryQueue') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('processMailRetryQueue').timeBased().everyMinutes(1).create();
 }
 
 function ensureSheet_(ss, sheetName, headers) {
