@@ -26,6 +26,8 @@ const statusLabels: Record<string, string> = {
   Rejected: '舊資料：已駁回',
 };
 
+const isCompletedStatus = (status: string) => status === 'Completed' || status === 'Approved';
+
 function valueOf(ticket: Ticket, key: string) {
   const value = ticket.formData?.[key];
   return value == null || value === '' ? '-' : String(value);
@@ -154,7 +156,12 @@ export default function ApproverDashboard({ user }: { user: any }) {
 
       <div className="space-y-4">
         {filteredTickets.map((ticket) => (
-          <div key={ticket.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+          <div
+            key={ticket.id}
+            className={`bg-white rounded-2xl p-6 shadow-sm border ${
+              isCompletedStatus(ticket.status) ? 'border-emerald-200' : 'border-slate-200'
+            }`}
+          >
             <div className="flex flex-col lg:flex-row gap-6 justify-between">
               <div className="space-y-3 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -162,7 +169,13 @@ export default function ApproverDashboard({ user }: { user: any }) {
                     {ticket.formType}
                   </span>
                   <span className="font-mono text-slate-500 text-sm">{ticket.id}</span>
-                  <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-lg">
+                  <span
+                    className={`px-3 py-1 text-xs font-bold rounded-lg ${
+                      isCompletedStatus(ticket.status)
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-amber-50 text-amber-700'
+                    }`}
+                  >
                     {statusLabels[ticket.status] || ticket.status}
                   </span>
                 </div>
@@ -194,11 +207,15 @@ export default function ApproverDashboard({ user }: { user: any }) {
                 />
                 <button
                   onClick={() => completeTicket(ticket.id)}
-                  disabled={ticket.status === 'Completed' || actionLoading === ticket.id}
-                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 rounded-xl font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  disabled={isCompletedStatus(ticket.status) || actionLoading === ticket.id}
+                  className={`w-full px-4 py-3 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 ${
+                    isCompletedStatus(ticket.status)
+                      ? 'bg-slate-100 text-emerald-700 border border-emerald-200 cursor-not-allowed'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm shadow-emerald-500/20 disabled:opacity-70'
+                  }`}
                 >
                   {actionLoading === ticket.id ? <Loader2 className="w-5 h-5 animate-spin" /> : <CheckCircle className="w-5 h-5" />}
-                  {ticket.status === 'Completed' ? '已完成' : '完成結案'}
+                  {isCompletedStatus(ticket.status) ? '已完成結案' : '完成結案'}
                 </button>
               </div>
             </div>
