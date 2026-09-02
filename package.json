@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "npm run sync:api && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit",
+    "lint": "npm run sync:api && tsc --noEmit",
+    "sync:api": "esbuild api/app.ts --format=esm --target=es2022 --outfile=api/app.js",
     "start": "node server.ts"
   },
   "dependencies": {

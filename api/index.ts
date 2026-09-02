@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import type { Express } from 'express';
-import { createApp } from './app.ts';
+import { createApp } from './app.js';
 
 let appPromise: Promise<Express> | null = null;
 

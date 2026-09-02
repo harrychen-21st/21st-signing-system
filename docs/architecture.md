@@ -35,6 +35,8 @@ sequenceDiagram
 
 If `GOOGLE_APPS_SCRIPT_URL` is missing, many BFF endpoints return mock data. This is useful for development but must not be used as production truth.
 
+Vercel executes JavaScript functions at runtime, so `api/app.js` is generated from `api/app.ts` by `npm run sync:api` before lint/build and is kept in the repository as the runtime companion.
+
 ## Authentication flow
 
 ```mermaid

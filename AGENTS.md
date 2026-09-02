@@ -24,10 +24,11 @@ This is an existing system. Future Codex sessions must preserve current behavior
 
 - `README.md`: currently generic AI Studio run instructions; not authoritative for business behavior.
 - `AI_WORK_RECORD.md`: historical handover and implementation notes; useful but must be verified against code.
-- `package.json`: npm scripts and dependencies. `npm run lint` is TypeScript checking via `tsc --noEmit`.
+- `package.json`: npm scripts and dependencies. `npm run lint` syncs the Vercel API companion and runs TypeScript checking via `tsc --noEmit`.
 - `.env.example`: environment variable names only. Do not commit `.env` or `.env.local`.
 - `server.ts`: local/production Express bootstrap.
 - `api/app.ts`: main BFF/API implementation.
+- `api/app.js`: generated Vercel runtime companion for `api/app.ts`; regenerate with `npm run sync:api`.
 - `api/index.ts`: Vercel serverless adapter.
 - `apps-script-latest.js`: Apps Script implementation with request submission, AML tracking, some legacy workflow actions, and setup helpers.
 - `apps-script-deploy-clean.js`: cleaner Apps Script implementation with meeting-room APIs and mail retry helpers; confirm whether this is the deployed production script before changing GAS.
@@ -40,7 +41,7 @@ This is an existing system. Future Codex sessions must preserve current behavior
 - `src/AdminDashboard.tsx`: form type/spec management, AI form model generation, and notice board management.
 - `src/MeetingRoomBooking.tsx`: meeting-room calendar, booking creation, cancellation, and Google Calendar link generation.
 - `src/MeetingRoomAdmin.tsx`: admin room setup and booking cancellation.
-- `.github/workflows/ci.yml`: CI currently runs `npm ci` and `npm run build` on `main` pushes and PRs.
+- `.github/workflows/ci.yml`: CI currently runs `npm ci`, `npm run lint`, and `npm run build` on `main` pushes and PRs.
 
 # Business Rules
 
@@ -57,7 +58,7 @@ This is an existing system. Future Codex sessions must preserve current behavior
 
 # Workflow Rules
 
-Current user-facing UI is closer to a request intake and backoffice completion system. Legacy approver queue/action endpoints have been removed from `api/app.ts`; some legacy actions still exist in `apps-script-latest.js` until the deployed Apps Script source is confirmed.
+Current user-facing UI is closer to a request intake and backoffice completion system. Legacy approver queue/action endpoints have been removed from `api/app.ts`; run `npm run sync:api` so `api/app.js` stays aligned for Vercel. Some legacy actions still exist in `apps-script-latest.js` until the deployed Apps Script source is confirmed.
 
 - `MANAGER`: resolves to `Users.ManagerEmail` for the applicant.
 - `ROLE`: resolves to the configured `ROLE:*` value in `WorkflowRules.ApproverValue`.
