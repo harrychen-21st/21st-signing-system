@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "npm run sync:api && tsc --noEmit",
-    "sync:api": "esbuild api/app.ts --format=esm --target=es2022 --outfile=api/app.js",
+    "sync:api": "esbuild server/app.ts --format=esm --target=es2022 --outfile=api/app.js",
     "start": "node server.ts"
   },
   "dependencies": {

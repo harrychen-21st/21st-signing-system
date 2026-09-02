@@ -7,7 +7,7 @@ This is an existing system. Future Codex sessions must preserve current behavior
 # Architecture
 
 - React 19 + Vite + TypeScript renders the single-page app under `src/`.
-- `server.ts` starts an Express app from `api/app.ts`. In development it mounts Vite middleware; in production it serves `dist`.
+- `server.ts` starts an Express app from `server/app.ts`. In development it mounts Vite middleware; in production it serves `dist`.
 - `api/index.ts` adapts the Express app for Vercel serverless routing. `vercel.json` rewrites `/api/:path*` to this handler.
 - Google Apps Script is the database adapter and workflow-side integration layer. It reads and writes Google Sheets and sends notification email.
 - Google Sheets is the persistent datastore for users, tickets, form definitions, workflow rules, system settings, AML tracking, meeting rooms, bookings, audit logs, and mail retry state.
@@ -15,10 +15,10 @@ This is an existing system. Future Codex sessions must preserve current behavior
 # Source of Truth
 
 - React owns UI state, local JWT storage, form rendering, client-side required fields, print layouts, and meeting-room client validation.
-- `api/app.ts` owns JWT verification, route authorization, request normalization, local fallback data, company lookup fallback, and BFF contracts to Apps Script.
+- `server/app.ts` owns JWT verification, route authorization, request normalization, local fallback data, company lookup fallback, and BFF contracts to Apps Script.
 - Apps Script owns actual Google Sheets writes, application number generation in production, AML sheet synchronization, email notifications, meeting-room conflict checks, and audit log writes.
 - Google Sheets owns operational data and admin-edited configuration. The known sheets are `Users`, `Tickets`, `FormTypes`, `WorkflowRules`, `AuditLogs`, `FormDefinitions`, `SystemSettings`, `MeetingRooms`, `MeetingBookings`, and in `apps-script-deploy-clean.js`, `MailRetryQueue`.
-- `api/app.ts` includes local fallback form definitions for `AP`, `RD`, and `CS`. For these forms it can override fetched `ConfigJSON`; this means code and Sheets are both active sources and must be reconciled carefully before schema changes.
+- `server/app.ts` includes local fallback form definitions for `AP`, `RD`, and `CS`. For these forms it can override fetched `ConfigJSON`; this means code and Sheets are both active sources and must be reconciled carefully before schema changes.
 
 # Important Files
 
@@ -27,8 +27,8 @@ This is an existing system. Future Codex sessions must preserve current behavior
 - `package.json`: npm scripts and dependencies. `npm run lint` syncs the Vercel API companion and runs TypeScript checking via `tsc --noEmit`.
 - `.env.example`: environment variable names only. Do not commit `.env` or `.env.local`.
 - `server.ts`: local/production Express bootstrap.
-- `api/app.ts`: main BFF/API implementation.
-- `api/app.js`: generated Vercel runtime companion for `api/app.ts`; regenerate with `npm run sync:api`.
+- `server/app.ts`: main BFF/API implementation.
+- `api/app.js`: generated Vercel runtime companion for `server/app.ts`; regenerate with `npm run sync:api`.
 - `api/index.ts`: Vercel serverless adapter.
 - `apps-script-latest.js`: Apps Script implementation with request submission, AML tracking, some legacy workflow actions, and setup helpers.
 - `apps-script-deploy-clean.js`: cleaner Apps Script implementation with meeting-room APIs and mail retry helpers; confirm whether this is the deployed production script before changing GAS.
@@ -58,7 +58,7 @@ This is an existing system. Future Codex sessions must preserve current behavior
 
 # Workflow Rules
 
-Current user-facing UI is closer to a request intake and backoffice completion system. Legacy approver queue/action endpoints have been removed from `api/app.ts`; run `npm run sync:api` so `api/app.js` stays aligned for Vercel. Some legacy actions still exist in `apps-script-latest.js` until the deployed Apps Script source is confirmed.
+Current user-facing UI is closer to a request intake and backoffice completion system. Legacy approver queue/action endpoints have been removed from `server/app.ts`; run `npm run sync:api` so `api/app.js` stays aligned for Vercel. Some legacy actions still exist in `apps-script-latest.js` until the deployed Apps Script source is confirmed.
 
 - `MANAGER`: resolves to `Users.ManagerEmail` for the applicant.
 - `ROLE`: resolves to the configured `ROLE:*` value in `WorkflowRules.ApproverValue`.

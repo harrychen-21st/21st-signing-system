@@ -1,5 +1,5 @@
 import express from 'express';
-import { createApp } from './api/app.ts';
+import { createApp } from './server/app.ts';
 
 async function startServer() {
   const app = await createApp();

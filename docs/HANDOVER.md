@@ -22,7 +22,7 @@ The current implemented system is an internal request intake, tracking, AML/rela
 - Notice board management through `SystemSettings`.
 - Admin form/spec management and Gemini-assisted form modeling.
 - Meeting-room list, booking, cancellation, admin room management, and reminder functions in Apps Script.
-- Vercel deployment adapter and rewrite configuration. `api/index.ts` imports generated `api/app.js`, which is produced from `api/app.ts` by `npm run sync:api` during lint/build.
+- Vercel deployment adapter and rewrite configuration. `api/index.ts` imports generated `api/app.js`, which is produced from `server/app.ts` by `npm run sync:api` during lint/build.
 - GitHub Actions CI build on push/PR to `main`.
 
 ## Known Risks
@@ -89,7 +89,7 @@ The current implemented system is an internal request intake, tracking, AML/rela
 - Decide and document the official business process: multi-stage online approval versus backoffice completion.
 - Add tests for auth bypass paths, workflow rule evaluation, ticket submission, resubmission, and backoffice completion.
 - Disable procedural company fallback in production or label it clearly as unverified.
-- Smoke-test the Vercel production API after deployment. Vercel needs `api/app.js`, so it is generated from `api/app.ts` before lint/build.
+- Smoke-test the Vercel production API after deployment. Vercel needs `api/app.js`, so it is generated from `server/app.ts` before lint/build.
 - Address high-severity npm audit findings in a separate dependency PR.
 
 ### P2
