@@ -1007,20 +1007,24 @@ graph TD
       };
       const myTickets = rows.slice(1).filter((r) => {
         return r[2]?.toLowerCase() === email;
-      }).map((r) => ({
-        id: r[0],
-        createdAt: r[1],
-        applicantEmail: r[2],
-        applicantName: r[3],
-        dept: r[4],
-        formType: r[5],
-        status: r[6],
-        stage: r[7],
-        subject: r[9],
-        amount: r[10],
-        formData: r[12] ? JSON.parse(r[12]) : {},
-        currentApprover: getApproverDisplayName(r[13] || "")
-      }));
+      }).map((r) => {
+        const status = r[6];
+        const isCompleted = status === "Completed" || status === "Approved";
+        return {
+          id: r[0],
+          createdAt: r[1],
+          applicantEmail: r[2],
+          applicantName: r[3],
+          dept: r[4],
+          formType: r[5],
+          status,
+          stage: isCompleted ? "END" : r[7],
+          subject: r[9],
+          amount: r[10],
+          formData: r[12] ? JSON.parse(r[12]) : {},
+          currentApprover: isCompleted ? "" : getApproverDisplayName(r[13] || "")
+        };
+      });
       myTickets.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       res.json({ tickets: myTickets });
     } catch (error) {
@@ -1066,10 +1070,11 @@ graph TD
         dept: row[4],
         formType: row[5],
         status: row[6],
+        stage: row[6] === "Completed" || row[6] === "Approved" ? "END" : row[7],
         subject: row[9],
         amount: row[10],
         formData: parseJsonCell(row[12]),
-        currentApprover: row[13] || ""
+        currentApprover: row[6] === "Completed" || row[6] === "Approved" ? "" : row[13] || ""
       })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       res.json({ tickets });
     } catch (error) {

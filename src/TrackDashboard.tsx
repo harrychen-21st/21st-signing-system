@@ -29,6 +29,23 @@ interface MyTicket {
 
 const hiddenFormFields = new Set(['ALWAYS', 'expense_category']);
 
+const isCompletedStatus = (status: string) => ['Completed', 'Approved'].includes(status);
+
+const displayStatus = (status: string) => {
+  if (isCompletedStatus(status)) return '已結案 (核准)';
+  if (status === 'Rejected') return '已被駁回';
+  return status || '簽核中';
+};
+
+const deriveTicketStateFromLogs = (logs: AuditLog[]) => {
+  const latestTerminalLog = [...logs].reverse().find((log) => ['Completed', 'Approved', 'Rejected'].includes(log.action));
+  if (!latestTerminalLog) return {};
+  if (latestTerminalLog.action === 'Rejected') {
+    return { status: 'Rejected', stage: latestTerminalLog.stage || '1', currentApprover: '' };
+  }
+  return { status: 'Completed', stage: 'END', currentApprover: '' };
+};
+
 function matchesTicketSearch(ticket: MyTicket, query: string) {
   const keyword = query.trim().toLowerCase();
   if (!keyword) return true;
@@ -97,7 +114,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
           <div><span className="font-bold">申請人：</span> {ticket.applicantName} ({ticket.applicantEmail})</div>
           <div><span className="font-bold">所屬部門：</span> {ticket.dept}</div>
           <div><span className="font-bold">申請時間：</span> {new Date(ticket.createdAt).toLocaleString()}</div>
-          <div><span className="font-bold">表單狀態：</span> {ticket.status === 'Approved' ? '已結案 (核准)' : ticket.status}</div>
+          <div><span className="font-bold">表單狀態：</span> {displayStatus(ticket.status)}</div>
         </div>
       </div>
 
@@ -249,8 +266,10 @@ export default function TrackDashboard({ user }: { user: any }) {
     try {
       const res = await authFetch(`/api/tickets/${ticketId}/logs`);
       const data = await res.json();
+      const logs = data.logs || [];
+      const derivedState = deriveTicketStateFromLogs(logs);
       setTickets(prev => prev.map(t => 
-        t.id === ticketId ? { ...t, logs: data.logs } : t
+        t.id === ticketId ? { ...t, ...derivedState, logs } : t
       ));
     } catch (error) {
       console.error("Failed to load logs", error);
@@ -260,7 +279,7 @@ export default function TrackDashboard({ user }: { user: any }) {
   };
 
   const getStatusDisplay = (status: string, approver: string) => {
-    if (status === 'Approved') {
+    if (isCompletedStatus(status)) {
       return (
         <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg font-medium text-sm">
           <CheckCircle className="w-4 h-4" /> 審核通過 (已結案)
@@ -414,7 +433,7 @@ export default function TrackDashboard({ user }: { user: any }) {
                   ) : (
                     <p className="text-slate-500 text-sm py-2 italic text-center w-full">尚無任何簽核紀錄</p>
                   )}
-                  {ticket.status === 'Approved' && (
+                  {isCompletedStatus(ticket.status) && (
                      <div className="mt-6 text-center">
                        <button 
                          onClick={() => handlePrint(ticket.id)}

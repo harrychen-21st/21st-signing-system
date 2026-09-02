@@ -606,6 +606,7 @@ function completeTicket_(ss, ticketId, completedBy, note) {
   }
   if (rowIndex < 0) throw new Error('Ticket not found: ' + ticketId);
   sheet.getRange(rowIndex, 7).setValue('Completed');
+  sheet.getRange(rowIndex, 8).setValue('END');
   sheet.getRange(rowIndex, 14).setValue('');
   var logSheet = ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp']);
   logSheet.appendRow([ticketId, 'Completed', completedBy || '', 'END', note || '後台完成結案', new Date().toISOString()]);

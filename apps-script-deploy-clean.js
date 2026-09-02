@@ -261,6 +261,7 @@ function completeTicket_(ss, ticketId, completedBy, note) {
   }
   if (rowIndex < 0) throw new Error('Ticket not found: ' + ticketId);
   sheet.getRange(rowIndex, 7).setValue('Completed');
+  sheet.getRange(rowIndex, 8).setValue('END');
   sheet.getRange(rowIndex, 14).setValue('');
 
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp'])
