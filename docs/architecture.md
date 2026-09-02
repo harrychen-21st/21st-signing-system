@@ -85,19 +85,14 @@ Production submission currently uses `submitApplication`, not the older `submitT
 
 ```mermaid
 flowchart TD
-  A[Ticket created] --> B{Current product path}
+  A[Ticket created] --> B[Current product path]
   B --> C[Backoffice views /api/backoffice/tickets]
   C --> D[Authorized staff manually handle request]
   D --> E[POST /api/tickets/:id/complete]
   E --> F[Apps Script sets Completed and writes AuditLogs]
-
-  B --> G{Legacy approval path still present}
-  G --> H[/api/tickets/pending/:email]
-  H --> I[/api/tickets/:id/action]
-  I --> J[evaluateDynamicRules and updateTicket]
 ```
 
-The visible UI is currently backoffice completion oriented. Legacy per-stage approval APIs remain and should be audited before being reactivated or extended.
+The visible UI is currently backoffice completion oriented. Legacy per-stage approval APIs were removed from the Express BFF; `apps-script-latest.js` still contains some historical actions and should be reconciled after confirming the deployed Apps Script source.
 
 ## Workflow rule evaluation flow
 
@@ -117,7 +112,7 @@ flowchart TD
   I --> J[END]
 ```
 
-`SPECIAL:AML_CHECK` is treated like a fallback approver value in assignment, with extra validation in the legacy approve action.
+`SPECIAL:AML_CHECK` remains part of the workflow-rule vocabulary, but current production submission handles AML by writing investigation rows and setting ticket status rather than by using the removed online approve/reject action endpoint.
 
 ## Admin configuration flow
 

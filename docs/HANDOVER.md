@@ -4,7 +4,7 @@
 
 The app builds and type-checks successfully. It can run locally through `npm run dev` and serves the React app through Express/Vite at `http://localhost:3000`.
 
-The current implemented system is an internal request intake, tracking, AML/related-party investigation notification, backoffice completion, and meeting-room booking system. The codebase still contains older dynamic multi-stage approval logic, but the visible `ApproverDashboard` now uses `/api/backoffice/tickets` and `/api/tickets/:ticketId/complete` rather than the older approve/reject queue.
+The current implemented system is an internal request intake, tracking, AML/related-party investigation notification, backoffice completion, and meeting-room booking system. The Express BFF now exposes the current backoffice completion path and no longer exposes the old online approve/reject queue.
 
 ## Existing Features
 
@@ -17,7 +17,7 @@ The current implemented system is an internal request intake, tracking, AML/rela
 - Application number generation in Apps Script.
 - AML/related-party row synchronization and investigation email notification.
 - Applicant request tracking with audit log display.
-- Rejected-ticket resubmission path through legacy APIs.
+- Rejected-ticket resubmission path with owner/admin checks.
 - Backoffice ticket list and manual completion.
 - Notice board management through `SystemSettings`.
 - Admin form/spec management and Gemini-assisted form modeling.
@@ -29,20 +29,16 @@ The current implemented system is an internal request intake, tracking, AML/rela
 
 ### Critical
 
-- `JWT_SECRET` falls back to a hardcoded value in `api/app.ts`. If production lacks a real secret, tokens can be forged.
-- Several identity-sensitive endpoints accept email fields from route/body without consistently checking they match `req.user.email`. Examples include applicant history, legacy pending lookup, ticket submission payload, and resubmission payload. This creates spoofing or unauthorized data access risk if routes are exposed.
-- Legacy `POST /api/tickets/:ticketId/action` does not verify that the authenticated user is the current approver before approving/rejecting. It trusts `approverEmail` from the request body.
-- `POST /api/settings`, `POST /api/form-types`, `POST /api/form-definitions/:formId`, and `POST /api/rules/:formType` are protected by JWT but are not consistently server-side admin-only. UI hides them from non-admins, but API authorization should be enforced server-side.
+- Apps Script Web App actions are not independently authenticated by the BFF JWT. If the script URL is public or leaked, GAS write actions must rely on Apps Script deployment access controls or a future shared-secret check.
 
 ### High
 
-- Production fallback behavior can return mock data or procedural company data when external sources are missing or empty. This is dangerous for production if configuration is absent or an upstream API fails.
+- Development fallback behavior can return mock data when external sources are missing. Procedural company generation is now disabled in `NODE_ENV=production`, but production configuration still needs explicit verification.
 - There are two Apps Script files with overlapping but different capabilities. It is UNKNOWN which script is deployed. `apps-script-deploy-clean.js` includes meeting-room and mail retry support that `apps-script-latest.js` does not fully share.
-- `api/app.js` is a compiled copy committed beside `api/app.ts`. It can drift from source and create deployment ambiguity.
-- Current product wording and `ApproverDashboard` use backoffice completion, while `AI_WORK_RECORD.md` and legacy APIs still describe/implement multi-stage approval. The active business process needs owner confirmation.
+- Current product wording and `ApproverDashboard` use backoffice completion, while `AI_WORK_RECORD.md` and Apps Script legacy actions still describe/implement multi-stage approval. The active business process needs owner confirmation.
 - `GET /api/form-definitions` force-overrides local `RD` definition content and always uses local `ConfigJSON` for known forms, even when Sheets has different configuration.
 - npm audit reports 11 vulnerabilities, including 7 high severity items across `vite`, `postcss`, `protobufjs`, `ws`, `nanoid`, `extract-zip`, and transitive dependencies.
-- The CI workflow runs `npm run build` but not `npm run lint`, so TypeScript checking can pass locally but is not enforced in PR CI.
+- CI now runs `npm run lint` before `npm run build`.
 - Apps Script `saveRules` deletes existing rules for a form and then inserts replacements. With bad input or partial failure, a form's workflow rules can be lost.
 
 ## Technical Debt
@@ -79,15 +75,13 @@ The current implemented system is an internal request intake, tracking, AML/rela
 - Whether meeting-room functions are deployed and actively used.
 - Whether procedural company fallback should be disabled in production.
 - Whether Vercel production has `JWT_SECRET`, `GOOGLE_APPS_SCRIPT_URL`, and `GEMINI_API_KEY` configured.
-- Whether `api/app.js` is intentionally required by Vercel or can be removed after deployment validation.
+- Whether legacy Apps Script actions such as `submitTickets`, `updateTicket`, and `resubmitTicket` are still needed by any deployed client.
 
 ## Recommended Next Steps
 
 ### P0
 
-- Require `JWT_SECRET` in production and remove or block hardcoded fallback for deployed environments.
-- Enforce server-side authorization for all admin writes.
-- Bind identity-sensitive API requests to `req.user.email` and roles; do not trust body/path email for ownership or approver identity.
+- Add request authentication directly to Apps Script write actions or restrict Apps Script Web App access.
 - Confirm the active Apps Script deployment source and make one script the canonical production script.
 
 ### P1
@@ -95,7 +89,7 @@ The current implemented system is an internal request intake, tracking, AML/rela
 - Decide and document the official business process: multi-stage online approval versus backoffice completion.
 - Add tests for auth bypass paths, workflow rule evaluation, ticket submission, resubmission, and backoffice completion.
 - Disable procedural company fallback in production or label it clearly as unverified.
-- Add `npm run lint` to GitHub Actions.
+- Confirm Vercel can bundle the TypeScript API path after removing the committed compiled `api/app.js`.
 - Address high-severity npm audit findings in a separate dependency PR.
 
 ### P2
@@ -108,7 +102,6 @@ The current implemented system is an internal request intake, tracking, AML/rela
 ### P3
 
 - Update `README.md` with real setup and operating instructions.
-- Decide whether to keep or remove `api/app.js`.
 - Add user-facing admin documentation for form/rule setup.
 - Add operational dashboards or logs for mail retry and AML notification failures.
 

@@ -6,7 +6,13 @@ import { GoogleGenAI, Type } from "@google/genai";
 dotenv.config({ path: '.env.local' });
 dotenv.config();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-key';
+const getJwtSecret = () => {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production');
+  }
+  return 'fallback-secret-key';
+};
 
 declare global {
   namespace Express {
@@ -31,10 +37,13 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction): any =>
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, getJwtSecret());
     req.user = decoded as any;
     next();
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.message === 'JWT_SECRET is required in production') {
+      return res.status(500).json({ error: "Server configuration error" });
+    }
     return res.status(401).json({ error: "Unauthorized: Invalid token" });
   }
 };
@@ -86,9 +95,32 @@ const meetingBookingHeaders = ['BookingID', 'RoomID', 'RoomName', 'BookerEmail',
 
 const isAdminUser = (user?: { roles?: string[] }) => user?.roles?.includes('ROLE:ADMIN');
 
+const canAccessBackoffice = (user?: { roles?: string[] }) => {
+  const roles = user?.roles || [];
+  return roles.some((role) => [
+    'ROLE:ADMIN',
+    'ROLE:ADMIN_HEAD',
+    'ROLE:ADMIN_DIRECTOR',
+    'ROLE:FINANCE',
+    'ROLE:RISK',
+    'ROLE:DEPT_HEAD',
+    'ROLE:GM'
+  ].includes(role));
+};
+
+const isSameUserOrAdmin = (requestedEmail: string, user?: { email?: string; roles?: string[] }) =>
+  isAdminUser(user) || String(user?.email || '').toLowerCase() === String(requestedEmail || '').toLowerCase();
+
 const allowedGeneratedFieldTypes = new Set(['text', 'number', 'date', 'select', 'textarea']);
+const allowedGeneratedApproverTypes = new Set(['MANAGER', 'ROLE', 'SPECIAL:AML_CHECK', 'DEPT']);
 
 const normalizeGeneratedFormId = (value: string) => String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+
+const normalizeGeneratedApproverType = (value: any) => {
+  const normalized = String(value || 'ROLE').trim().toUpperCase();
+  if (normalized === 'HIERARCHY') return 'MANAGER';
+  return allowedGeneratedApproverTypes.has(normalized) ? normalized : 'ROLE';
+};
 
 const normalizeGeneratedFields = (fields: any[] = []) => {
   return fields
@@ -117,7 +149,7 @@ const normalizeGeneratedRules = (rules: any[] = []) => {
     conditionField: String(rule?.conditionField || 'ALWAYS'),
     conditionOp: String(rule?.conditionOp || '=='),
     conditionVal: String(rule?.conditionVal || 'TRUE'),
-    approverType: ['HIERARCHY', 'ROLE', 'DEPT'].includes(String(rule?.approverType)) ? String(rule.approverType) : 'ROLE',
+    approverType: normalizeGeneratedApproverType(rule?.approverType),
     approverValue: String(rule?.approverValue || 'ROLE:ADMIN')
   }));
 };
@@ -210,29 +242,30 @@ export async function createApp() {
     const lowerEmail = email.toLowerCase();
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
 
-    // Fallback mock user if no script URL
-    let userInfo: any = { name: '預設測試員 (Test)', dept: 'CS (客服處)', manager: '', roles: 'ROLE:EMPLOYEE' };
+    let userInfo: any;
 
     if (scriptUrl) {
       try {
         const response = await fetch(`${scriptUrl}?action=getUser&email=${encodeURIComponent(lowerEmail)}`);
-        if (response.ok) {
-          const text = await response.text();
-          let data;
-          try {
-            data = JSON.parse(text);
-          } catch(e) {
-            console.error("Parse error on login response", text);
-            return res.status(500).json({ error: "Database response error" });
-          }
-          if (data.success && data.user) {
-            userInfo = data.user;
-          } else {
-             return res.status(401).json({ error: data.error || "User not found in directory" });
-          }
+        if (!response.ok) {
+          return res.status(503).json({ error: "Directory service unavailable" });
+        }
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch(e) {
+          console.error("Parse error on login response", text);
+          return res.status(500).json({ error: "Database response error" });
+        }
+        if (data.success && data.user) {
+          userInfo = data.user;
+        } else {
+           return res.status(401).json({ error: data.error || "User not found in directory" });
         }
       } catch (err) {
         console.error("Login Error fetching user:", err);
+        return res.status(503).json({ error: "Directory service unavailable" });
       }
     } else {
       const mockDbUsers: Record<string, any> = {
@@ -252,13 +285,16 @@ export async function createApp() {
       roles: (userInfo.roles || '').split(',').map((r: string) => r.trim()).filter(Boolean)
     };
 
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
     res.json({ success: true, token, user: payload });
   });
 
   // 1. Fetch User from Google Sheets via Apps Script (Fallback to Mock if not configured)
   app.get("/api/users/:email", authMiddleware, async (req, res): Promise<any> => {
     const email = req.params.email.toLowerCase();
+    if (!isSameUserOrAdmin(email, req.user)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
     
     // Fallback mock data
     const mockDbUsers: Record<string, { name: string; dept: string }> = {
@@ -273,9 +309,8 @@ export async function createApp() {
       console.warn("GOOGLE_APPS_SCRIPT_URL is not set. Using mock user data.");
       if (mockDbUsers[email]) {
         return res.json({ success: true, user: { ...mockDbUsers[email], manager: '', roles: '' }, source: 'mock' });
-      } else {
-        return res.json({ success: true, user: { name: '預設測試員 (Test Role)', dept: 'CS (客服處)', manager: '', roles: '' }, source: 'mock' });
       }
+      return res.status(404).json({ success: false, error: "User not found (Mock)" });
     }
 
     try {
@@ -370,6 +405,13 @@ export async function createApp() {
       });
     }
 
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(404).json({
+        success: false,
+        error: "查無可驗證公司資料，請手動確認統一編號與公司資訊。"
+      });
+    }
+
     const lastNamePool = ['陳', '林', '黃', '張', '李', '王', '吳', '劉', '蔡', '楊'];
     const middleNamePool = ['建', '信', '冠', '志', '家', '俊', '雅', '婷', '佳', '欣'];
     const firstNamePool = ['宏', '廷', '宇', '豪', '傑', '銘', '涵', '萱', '茹', '君'];
@@ -415,6 +457,8 @@ export async function createApp() {
   });
 
   app.post("/api/settings", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+
     const { key, value } = req.body;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) return res.json({ success: true });
@@ -556,6 +600,8 @@ export async function createApp() {
   });
 
   app.post("/api/form-types", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+
     const { id, name } = req.body;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) return res.json({ success: true });
@@ -791,6 +837,8 @@ graph TD
   });
 
   app.post("/api/form-definitions/:formId", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+
     const { formId } = req.params;
     const { fieldsMarkdown, logicMarkdown, configJSON } = req.body;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
@@ -822,6 +870,8 @@ graph TD
   });
 
   app.get("/api/rules/:formType", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+
     const { formType } = req.params;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) {
@@ -838,7 +888,7 @@ graph TD
         conditionField: r[3] || '',
         conditionOp: r[4] || '',
         conditionVal: r[5] || '',
-        approverType: r[6] || 'HIERARCHY',
+        approverType: normalizeGeneratedApproverType(r[6]),
         approverValue: r[7] || ''
       }));
       // Sort by stage
@@ -851,6 +901,8 @@ graph TD
   });
 
   app.post("/api/rules/:formType", authMiddleware, async (req, res): Promise<any> => {
+    if (!isAdminUser(req.user)) return res.status(403).json({ error: "Forbidden" });
+
     const { formType } = req.params;
     const { rules } = req.body;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
@@ -887,9 +939,14 @@ graph TD
   // ============================================================================
   app.post("/api/submit-approval", authMiddleware, async (req, res): Promise<any> => {
     try {
-      const { applicantEmail, applicantName, department, tickets } = req.body;
+      const { tickets } = req.body;
       const firstTicket = tickets?.[0];
       if (!firstTicket) return res.status(400).json({ error: "Missing ticket payload" });
+      if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+
+      const applicantEmail = req.user.email;
+      const applicantName = req.user.name;
+      const department = req.user.dept;
 
       const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
       if (!scriptUrl) {
@@ -917,175 +974,6 @@ graph TD
     } catch (error: any) {
       console.error("Error submitting application:", error);
       return res.status(500).json({ error: error.message || "Internal Server Error" });
-    }
-  });
-
-  // Legacy route body kept below for reference. The handler above returns first.
-  /*
-  // ============================================================================
-  // 2. Submit Approval Form to Google Sheets via Apps Script
-  // ============================================================================
-  app.post("/api/submit-approval", authMiddleware, async (req, res): Promise<any> => {
-    try {
-      const { applicantEmail, applicantName, department, tickets } = req.body;
-      const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-
-      if (!scriptUrl) {
-        console.warn("GOOGLE_APPS_SCRIPT_URL is not set. Skipping actual Google Sheets insertion.");
-        return res.json({ success: true, message: "Mock submission successful" });
-      }
-
-      // Fetch dynamic rules and users to determine the real first stage path
-      const [rulesRes, usersRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=WorkflowRules`),
-        fetch(`${scriptUrl}?action=getData&sheet=Users`)
-      ]);
-      const rulesData = await rulesRes.json();
-      const usersData = await usersRes.json();
-      
-      const allRules = rulesData.data || [];
-      const allUsers = usersData.data || [];
-
-      // Prepare data for Google Sheets based on the schema
-      const rows = tickets.map((t: any) => {
-        const { id, formType, formData, subject, amount } = t;
-
-        const createdAt = new Date();
-        const slaDeadline = new Date(createdAt.getTime() + 60 * 24 * 60 * 60 * 1000); // 60天作廢死線
-
-        // 使用動態規則引擎，決定第一關的簽核者 (currentStage 傳入 0 代表從頭開始評估下一關 = 1)
-        const next = evaluateDynamicRules(allRules, 0, formData, formType, applicantEmail, allUsers);
-
-        return [
-          id,                                // A: 單號 (TicketID)
-          createdAt.toISOString(),           // B: 建立時間 (CreatedAt)
-          applicantEmail,                    // C: 申請人信箱 (ApplicantEmail)
-          applicantName,                     // D: 申請人姓名 (ApplicantName)
-          department,                        // E: 所屬部門 (Department)
-          formType,                          // F: 表單類型 (FormType)
-          "Pending",                         // G: 狀態 (Status)
-          next.stage.toString(),             // H: 目前關卡 (CurrentStage)
-          slaDeadline.toISOString(),         // I: 作廢死線 (SLA_Deadline)
-          subject || '',                     // J: 主旨/事由 (Subject)
-          amount || '',                      // K: 金額 (Amount)
-          "FALSE",                           // L: 需AML查核 (Legacy, keep string for now)
-          JSON.stringify(formData),          // M: 完整動態資料 (FormData JSON)
-          next.approver                      // N: 目前簽核者 (CurrentApprover)
-        ];
-      });
-
-      // Call the Google Apps Script Web App (POST request)
-      const response = await fetch(scriptUrl, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ action: 'submitTickets', rows: rows }),
-      });
-
-      const responseText = await response.text();
-      let result;
-      try {
-        result = JSON.parse(responseText);
-      } catch (e) {
-        console.error("Apps Script returned HTML instead of JSON. Script is likely missing doPost(e), or threw an unhandled exception.");
-        console.error("Response snippet:", responseText.substring(0, 200));
-        throw new Error(`Apps Script responded with invalid JSON (HTML). 
-這通常代表幾種情況：
-1. 您的 Google Apps Script 程式碼中忘記加入 \`doPost(e)\` 函數，或是裡面執行發生錯誤。
-2. 部署權限設定錯誤 (必須設定為「存取權限: 所有人 (Anyone)」)。
-3. 未將最新版本的 Apps Script 重新發布 (請點擊「部署 > 管理部署作業 > 編輯 > 建立新版本」)。
-請檢查您的 Apps Script 後台。`);
-      }
-
-      if (!response.ok) throw new Error(`Apps Script returned status: ${response.status}`);
-      if (!result.success) throw new Error(result.error || "Unknown error from Apps Script");
-
-      const generatedIds = result.generatedIds || tickets.map((t: any) => t.id);
-      res.json({ success: true, generatedIds });
-    } catch (error: any) {
-      console.error("Error submitting to Apps Script:", error);
-      res.status(500).json({ error: error.message || "Internal Server Error" });
-    }
-  });
-  */
-
-  // 3. Fetch Pending Tickets for an Approver
-  app.get("/api/tickets/pending/:email", authMiddleware, async (req, res): Promise<any> => {
-    const email = req.params.email.toLowerCase();
-    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-
-    // Demo tickets for testing the UI
-    const mockTickets = [
-      { id: 'DEMO-AP-001', createdAt: new Date().toISOString(), applicantEmail: 'test@company.com', applicantName: '陳小明 (展示用)', dept: 'MK (行銷企劃部)', formType: 'AP', subject: '行銷合作專案簽呈', amount: '', status: 'Pending', stage: '1' }
-    ];
-
-    if (!scriptUrl) {
-      return res.json({ tickets: mockTickets, source: 'mock' });
-    }
-
-    try {
-      // 1. 取得使用者的系統角色 (例如 ROLE:FINANCE)
-      const usersRes = await fetch(`${scriptUrl}?action=getData&sheet=Users`);
-      const usersData = await usersRes.json();
-      const myRow = (usersData.data || []).find((r: any) => r[0]?.toLowerCase() === email);
-      // 假設 E 欄 (index 4) 存放角色，例如 "ROLE:FINANCE,ROLE:GM"
-      const myRolesStr = String(myRow && myRow[4] ? myRow[4] : '');
-      const myRoles = myRolesStr ? myRolesStr.split(',').map((r:string)=>r.trim()) : [];
-
-      // 2. 取得所有單據與規則
-      const [ticketsRes, rulesRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=Tickets`),
-        fetch(`${scriptUrl}?action=getData&sheet=WorkflowRules`)
-      ]);
-      const ticketsData = await ticketsRes.json();
-      const rulesData = await rulesRes.json();
-      
-      const ticketsRows = ticketsData.data || [];
-      const allRules = rulesData.data || [];
-
-      // 3. 過濾單據：狀態為 Pending，且 CurrentApprover 是我的信箱，或是我的角色
-      const pendingTickets = ticketsRows.slice(1).filter((row: any) => {
-        const tStatus = row[6];
-        const tApprover = row[13]; // N欄: CurrentApprover
-        
-        if (tStatus !== 'Pending') return false;
-        
-        const isMyTurn = (tApprover?.toLowerCase() === email) || myRoles.includes(tApprover);
-        return isMyTurn;
-      }).map((row: any) => {
-        const tFormType = row[5];
-        const tStage = Number(row[7]);
-        
-        // Find rule for this stage to know if it's special
-        const stageRule = allRules.find((r:any) => r[1] === tFormType && Number(r[2]) === tStage);
-        const approverType = stageRule ? stageRule[6] : '';
-        
-        return {
-          id: row[0],
-          createdAt: row[1],
-          applicantEmail: row[2],
-          applicantName: row[3],
-          dept: row[4],
-          formType: tFormType,
-          status: row[6],
-          stage: tStage,
-          subject: row[9],
-          amount: row[10],
-          formData: row[12] ? JSON.parse(row[12]) : {},
-          approverType
-        };
-      });
-
-      if (pendingTickets.length === 0) {
-        return res.json({ tickets: mockTickets, source: 'demo_mock' });
-      }
-
-      res.json({ tickets: pendingTickets, source: 'sheets' });
-    } catch (error) {
-      console.error("Error fetching tickets:", error);
-      res.json({ tickets: mockTickets, source: 'mock_error' });
     }
   });
 
@@ -1175,113 +1063,10 @@ graph TD
     return { stage: 'END', approver: '' };
   };
 
-  // 4. Approve/Reject Ticket (Dynamic Rule Engine Integration)
-  app.post("/api/tickets/:ticketId/action", authMiddleware, async (req, res): Promise<any> => {
-    const { ticketId } = req.params;
-    const { action, approverEmail, comment, formDataUpdates } = req.body; // action: 'approve' | 'reject'
-    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-
-    if (ticketId.startsWith('DEMO-')) {
-      await new Promise(resolve => setTimeout(resolve, 800));
-      return res.json({ success: true, message: "Demo action successful" });
-    }
-
-    if (!scriptUrl) {
-      return res.json({ success: true, message: "Mock action successful" });
-    }
-
-    try {
-      // 必須先取得這張單的資料，才能跑規則引擎
-      const [ticketsRes, rulesRes, usersRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=Tickets`),
-        fetch(`${scriptUrl}?action=getData&sheet=WorkflowRules`),
-        fetch(`${scriptUrl}?action=getData&sheet=Users`)
-      ]);
-      const ticketsData = await ticketsRes.json();
-      const rulesData = await rulesRes.json();
-      const usersData = await usersRes.json();
-      
-      const ticketRow = (ticketsData.data || []).find((r:any) => r[0] === ticketId);
-      if (!ticketRow) throw new Error("Ticket not found");
-
-      const formType = ticketRow[5];
-      const currentStage = Number(ticketRow[7]);
-      const formData = JSON.parse(ticketRow[12] || '{}');
-      const applicantEmail = ticketRow[2];
-      
-      if (formDataUpdates && typeof formDataUpdates === 'object') {
-        Object.assign(formData, formDataUpdates);
-      }
-
-      const allRules = rulesData.data || [];
-      const currentRule = allRules.find((r:any) => r[1] === formType && Number(r[2]) === currentStage);
-      const approverType = currentRule ? currentRule[6] : '';
-
-      // Server-side validation for AML Check
-      if (action === 'approve' && approverType === 'SPECIAL:AML_CHECK') {
-        if (formData.aml_result === '不正常' || formData.rp_result === '關係人交易但未經過董事會同意') {
-          return res.status(400).json({ error: "此單據未通過 AML 或關係人交易審查，只能進行駁回操作。" });
-        }
-      }
-
-      let newStatus = 'Pending';
-      let newStage: string | number = currentStage;
-      let newApprover = '';
-
-      if (action === 'reject') {
-        // 駁回重啟：直接退回發起人信箱
-        newStatus = 'Rejected'; 
-        newStage = 1;
-        newApprover = applicantEmail;
-      } else {
-        // 核准：【使用動態規則引擎決定下一關】
-        const allUsers = usersData.data || [];
-        
-        // Dynamic Rule Evaluation with skip logic included
-        const next = evaluateDynamicRules(allRules, currentStage, formData, formType, applicantEmail, allUsers);
-        
-        if (next.stage === 'END') {
-          newStatus = 'Approved';
-          newStage = currentStage;
-          newApprover = '';
-        } else {
-          newStatus = 'Pending';
-          newStage = next.stage;
-          newApprover = next.approver;
-        }
-      }
-
-      // 呼叫 Apps Script 更新
-      const response = await fetch(scriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'updateTicket',
-          ticketId,
-          status: newStatus,
-          stage: newStage,
-          nextApprover: newApprover,
-          approverEmail,
-          actionType: action,
-          comment,
-          formData: formDataUpdates ? formData : undefined // Only send if updated
-        })
-      });
-
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
-      
-      res.json({ success: true, newStatus, newStage, newApprover });
-    } catch (error: any) {
-      console.error("Error updating ticket:", error);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
   // 4.5 Resubmit Ticket
   app.post("/api/tickets/:ticketId/resubmit", authMiddleware, async (req, res): Promise<any> => {
     const { ticketId } = req.params;
-    const { applicantEmail, formData, amount, subject } = req.body;
+    const { formData = {}, amount, subject } = req.body;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
 
     if (ticketId.startsWith('DEMO-')) {
@@ -1307,6 +1092,13 @@ graph TD
       if (!ticketRow) throw new Error("Ticket not found");
 
       const formType = ticketRow[5];
+      const applicantEmail = String(ticketRow[2] || '').toLowerCase();
+      if (!isSameUserOrAdmin(applicantEmail, req.user)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      if (String(ticketRow[6] || '') !== 'Rejected') {
+        return res.status(400).json({ error: "Only rejected tickets can be resubmitted" });
+      }
 
       // Re-evaluate rules from stage 0
       const allRules = rulesData.data || [];
@@ -1353,6 +1145,10 @@ graph TD
   // 5. Fetch My Own Submitted Tickets
   app.get("/api/tickets/my/:email", authMiddleware, async (req, res): Promise<any> => {
     const email = req.params.email.toLowerCase();
+    if (!isSameUserOrAdmin(email, req.user)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
 
     // Demo tickets for testing the UI
@@ -1452,18 +1248,7 @@ graph TD
 
   app.get("/api/backoffice/tickets", authMiddleware, async (req, res): Promise<any> => {
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
-    const roles = req.user?.roles || [];
-    const canViewBackoffice = roles.some((role) => [
-      'ROLE:ADMIN',
-      'ROLE:ADMIN_HEAD',
-      'ROLE:ADMIN_DIRECTOR',
-      'ROLE:FINANCE',
-      'ROLE:RISK',
-      'ROLE:DEPT_HEAD',
-      'ROLE:GM'
-    ].includes(role));
-
-    if (!canViewBackoffice) {
+    if (!canAccessBackoffice(req.user)) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
@@ -1497,6 +1282,10 @@ graph TD
   });
 
   app.post("/api/tickets/:ticketId/complete", authMiddleware, async (req, res): Promise<any> => {
+    if (!canAccessBackoffice(req.user)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) return res.json({ success: true, source: 'mock' });
 
@@ -1641,6 +1430,10 @@ graph TD
       console.error("Error cancelling meeting booking:", error);
       res.status(500).json({ error: error.message || "Failed to cancel meeting booking" });
     }
+  });
+
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "API route not found" });
   });
 
   return app;

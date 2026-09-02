@@ -10,7 +10,7 @@ interface Rule {
   conditionField: string;
   conditionOp: string;
   conditionVal: string;
-  approverType: 'HIERARCHY' | 'ROLE' | 'DEPT';
+  approverType: 'MANAGER' | 'ROLE' | 'SPECIAL:AML_CHECK' | 'DEPT';
   approverValue: string;
 }
 

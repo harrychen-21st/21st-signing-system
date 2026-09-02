@@ -29,8 +29,7 @@ This is an existing system. Future Codex sessions must preserve current behavior
 - `server.ts`: local/production Express bootstrap.
 - `api/app.ts`: main BFF/API implementation.
 - `api/index.ts`: Vercel serverless adapter.
-- `api/app.js`: compiled JavaScript copy of `api/app.ts`; treat as a deployment/maintenance risk because it can drift.
-- `apps-script-latest.js`: Apps Script implementation with request submission, AML tracking, legacy workflow actions, and setup helpers.
+- `apps-script-latest.js`: Apps Script implementation with request submission, AML tracking, some legacy workflow actions, and setup helpers.
 - `apps-script-deploy-clean.js`: cleaner Apps Script implementation with meeting-room APIs and mail retry helpers; confirm whether this is the deployed production script before changing GAS.
 - `src/App.tsx`: top-level tab routing and role-based UI visibility.
 - `src/LoginForm.tsx`: email-only login form.
@@ -58,11 +57,11 @@ This is an existing system. Future Codex sessions must preserve current behavior
 
 # Workflow Rules
 
-Current user-facing UI is closer to a request intake and backoffice completion system. However, legacy dynamic approval endpoints still exist in `api/app.ts` and `apps-script-latest.js`.
+Current user-facing UI is closer to a request intake and backoffice completion system. Legacy approver queue/action endpoints have been removed from `api/app.ts`; some legacy actions still exist in `apps-script-latest.js` until the deployed Apps Script source is confirmed.
 
 - `MANAGER`: resolves to `Users.ManagerEmail` for the applicant.
 - `ROLE`: resolves to the configured `ROLE:*` value in `WorkflowRules.ApproverValue`.
-- `SPECIAL:AML_CHECK`: treated as a special approval type in legacy approval action code. Server-side code blocks approval if AML result is abnormal or related-party approval is missing.
+- `SPECIAL:AML_CHECK`: represented in legacy workflow rules and current AML tracking. Current production submission writes AML investigation rows instead of routing through an online approval action.
 - Skip Logic: legacy `evaluateDynamicRules` skips a `MANAGER` stage when the manager email equals the applicant email, and skips a `ROLE` stage when the applicant already has that role.
 - `AP` default legacy rules: manager, department head, conditional AML check on `external_collab == 是`, admin VP, GM.
 - `RD` default legacy rules: manager, department head, admin VP and GM only when `amount > 5000`.
@@ -97,8 +96,6 @@ Primary Express endpoints:
 - `GET /api/form-definitions`, `POST /api/form-definitions/:formId`: form definition list/upsert.
 - `GET /api/rules/:formType`, `POST /api/rules/:formType`: legacy workflow rule list/replace.
 - `POST /api/submit-approval`: current form submission BFF. Calls Apps Script `submitApplication`.
-- `GET /api/tickets/pending/:email`: legacy approver queue.
-- `POST /api/tickets/:ticketId/action`: legacy approve/reject.
 - `POST /api/tickets/:ticketId/resubmit`: rejected ticket resubmission.
 - `GET /api/tickets/my/:email`: applicant history.
 - `GET /api/tickets/:ticketId/logs`: audit log lookup.
@@ -112,8 +109,8 @@ Primary Express endpoints:
 - Login is email-only. When `GOOGLE_APPS_SCRIPT_URL` exists, the email must be present in the `Users` sheet. Without that URL, only local mock users can log in.
 - JWTs are signed by `JWT_SECRET` and expire in 7 days.
 - `authMiddleware` protects all non-login APIs.
-- The default JWT secret is `fallback-secret-key` in `api/app.ts`; production must set `JWT_SECRET`.
-- Several endpoints accept email values in path or body and do not consistently verify that those values match `req.user.email`. Treat identity-sensitive changes as high risk.
+- Production must set `JWT_SECRET`; the BFF refuses to sign or verify JWTs in production without it.
+- Identity-sensitive routes must bind requested records to `req.user.email` or an explicit admin/backoffice role check.
 
 # Environment Variables
 
