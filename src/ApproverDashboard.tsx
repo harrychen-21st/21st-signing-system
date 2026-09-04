@@ -140,6 +140,7 @@ export default function ApproverDashboard({ user }: { user: any }) {
   const [note, setNote] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [filters, setFilters] = useState<Filters>({
     dept: '',
     formType: '',
@@ -194,6 +195,24 @@ export default function ApproverDashboard({ user }: { user: any }) {
     }
   };
 
+  const syncAmlRpResults = async () => {
+    setIsSyncing(true);
+    try {
+      const response = await authFetch('/api/backoffice/sync-aml-rp', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || '同步失敗');
+      await fetchTickets();
+      const updated = data.result?.updated ?? 0;
+      const syncedAt = data.result?.syncedAt ? ` (${data.result.syncedAt})` : '';
+      alert(`AML/關係人同步完成，更新 ${updated} 筆${syncedAt}`);
+    } catch (error: any) {
+      console.error('Failed to sync AML/RP results', error);
+      alert(error.message || '同步 AML/關係人失敗');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const updateFilter = (key: keyof Filters, value: string) => {
     setFilters((previous) => ({ ...previous, [key]: value }));
   };
@@ -238,14 +257,24 @@ export default function ApproverDashboard({ user }: { user: any }) {
           </h2>
           <p className="text-slate-500">檢視申請、追蹤 AML/關係人狀態，並在處理完成後結案。</p>
         </div>
-        <button
-          onClick={fetchTickets}
-          disabled={isFetching}
-          className="bg-slate-900 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-semibold transition-all disabled:opacity-70 flex items-center justify-center gap-2"
-        >
-          {isFetching ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
-          重新整理
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <button
+            onClick={syncAmlRpResults}
+            disabled={isSyncing || isFetching}
+            className="bg-sky-600 hover:bg-sky-500 text-white px-5 py-3 rounded-xl font-semibold transition-all disabled:opacity-70 flex items-center justify-center gap-2"
+          >
+            {isSyncing ? <Loader2 className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
+            同步 AML/關係人
+          </button>
+          <button
+            onClick={fetchTickets}
+            disabled={isFetching || isSyncing}
+            className="bg-slate-900 hover:bg-slate-700 text-white px-5 py-3 rounded-xl font-semibold transition-all disabled:opacity-70 flex items-center justify-center gap-2"
+          >
+            {isFetching ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
+            重新整理
+          </button>
+        </div>
       </div>
 
       <div className="relative bg-white/60 p-4 rounded-xl border border-slate-200 flex items-center gap-3 mb-6">

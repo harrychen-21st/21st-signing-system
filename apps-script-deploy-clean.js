@@ -73,6 +73,20 @@ function doGet(e) {
       return json_({ success: true, data: sheet.getDataRange().getValues() });
     }
 
+    if (action === 'getTicketBundle') {
+      var ticketsSheet = ensureTicketsSheet_(ss);
+      var relationsSheet = ensureSheet_(ss, 'TicketRelations', TICKET_RELATION_HEADERS);
+      ensureColumns_(relationsSheet, TICKET_RELATION_HEADERS);
+      var attachmentSheet = ensureSheet_(ss, 'AttachmentChecks', ATTACHMENT_CHECK_HEADERS);
+      ensureColumns_(attachmentSheet, ATTACHMENT_CHECK_HEADERS);
+      return json_({
+        success: true,
+        tickets: ticketsSheet.getDataRange().getValues(),
+        relations: relationsSheet.getDataRange().getValues(),
+        attachmentChecks: attachmentSheet.getDataRange().getValues()
+      });
+    }
+
     if (action === 'getAmlData') {
       var amlSheetId = getSetting_(ss, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
       var amlSheet = SpreadsheetApp.openById(amlSheetId).getSheets()[0];

@@ -99,6 +99,35 @@ const getOptionalSheetRows = async (scriptUrl, sheet, headers = []) => {
 const invalidateSheetCache = (scriptUrl, sheets) => {
   sheets.forEach((sheet) => sheetCache.delete(`${scriptUrl}|${sheet}`));
 };
+const getTicketBundleRows = async (scriptUrl, ttlMs = 2e4) => {
+  const cacheKey = `${scriptUrl}|TicketBundle`;
+  const cached = sheetCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    const rows = cached.rows;
+    return { ticketRows: rows[0], relationRows: rows[1], attachmentRows: rows[2], source: "bundle-cache" };
+  }
+  try {
+    const data = await fetchJson(`${scriptUrl}?action=getTicketBundle`);
+    if (data.success !== false && Array.isArray(data.tickets)) {
+      const ticketRows2 = data.tickets || [];
+      const relationRows2 = data.relations || [ticketRelationHeaders];
+      const attachmentRows2 = data.attachmentChecks || [attachmentCheckHeaders];
+      sheetCache.set(cacheKey, {
+        expiresAt: Date.now() + ttlMs,
+        rows: [ticketRows2, relationRows2, attachmentRows2]
+      });
+      return { ticketRows: ticketRows2, relationRows: relationRows2, attachmentRows: attachmentRows2, source: "bundle" };
+    }
+  } catch (error) {
+    console.warn("Ticket bundle unavailable, falling back to separate sheet reads:", error.message);
+  }
+  const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+    getSheetRows(scriptUrl, "Tickets", ttlMs),
+    getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
+    getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders)
+  ]);
+  return { ticketRows, relationRows, attachmentRows, source: "separate" };
+};
 const extractDeptCode = (department = "") => {
   const match = String(department).trim().match(/^[A-Za-z0-9]+/);
   return (match?.[0] || "XX").toUpperCase();
@@ -1186,7 +1215,7 @@ graph TD
         formData: firstTicket.formData || {},
         attachmentChecks
       });
-      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks"]);
+      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks", "TicketBundle"]);
       return res.json({
         success: true,
         generatedIds: [result.applicationNumber],
@@ -1235,7 +1264,7 @@ graph TD
         actorEmail: req.user?.email || applicantEmail,
         attachmentChecks
       });
-      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks"]);
+      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks", "TicketBundle"]);
       res.json({ success: true, newStatus: "Submitted", newStage: "", newApprover: "", attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === "Warning" || item.warning), result });
     } catch (error) {
       console.error("Error resubmitting ticket:", error);
@@ -1256,15 +1285,7 @@ graph TD
       return res.json({ tickets: [mockTickets[0], mockTickets[1]], source: "mock" });
     }
     try {
-      await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
-        console.warn("AML/RP sync skipped before my tickets fetch:", error.message);
-      });
-      invalidateSheetCache(scriptUrl, ["Tickets"]);
-      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
-        getSheetRows(scriptUrl, "Tickets"),
-        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
-        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders)
-      ]);
+      const { ticketRows, relationRows, attachmentRows } = await getTicketBundleRows(scriptUrl);
       const allTickets = parseTicketRows(ticketRows);
       const allRelations = parseRelationRows(relationRows);
       const allAttachments = parseAttachmentRows(attachmentRows);
@@ -1308,15 +1329,7 @@ graph TD
       return res.json({ tickets: [], source: "mock" });
     }
     try {
-      await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
-        console.warn("AML/RP sync skipped before backoffice tickets fetch:", error.message);
-      });
-      invalidateSheetCache(scriptUrl, ["Tickets"]);
-      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
-        getSheetRows(scriptUrl, "Tickets"),
-        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
-        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders)
-      ]);
+      const { ticketRows, relationRows, attachmentRows } = await getTicketBundleRows(scriptUrl);
       const allTickets = parseTicketRows(ticketRows);
       const allRelations = parseRelationRows(relationRows);
       const allAttachments = parseAttachmentRows(attachmentRows);
@@ -1341,7 +1354,7 @@ graph TD
         completedBy: req.user?.email,
         note: req.body?.note || ""
       });
-      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs"]);
+      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketBundle"]);
       res.json(result);
     } catch (error) {
       console.error("Error completing ticket:", error);
@@ -1376,6 +1389,21 @@ graph TD
       res.status(500).json({ error: error.message || "Failed to fetch ticket relations" });
     }
   });
+  app.post("/api/backoffice/sync-aml-rp", authMiddleware, async (req, res) => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!canAccessBackoffice(req.user)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    if (!scriptUrl) return res.status(503).json({ error: "GAS URL not configured" });
+    try {
+      const result = await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" });
+      invalidateSheetCache(scriptUrl, ["Tickets", "TicketBundle"]);
+      res.json(result);
+    } catch (error) {
+      console.error("Error syncing AML/RP results:", error);
+      res.status(500).json({ error: error.message || "Failed to sync AML/RP results" });
+    }
+  });
   app.get("/api/backoffice/audit-export", authMiddleware, async (req, res) => {
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!canAccessBackoffice(req.user)) {
@@ -1383,15 +1411,15 @@ graph TD
     }
     if (!scriptUrl) return res.status(503).json({ error: "GAS URL not configured" });
     try {
-      await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
-        console.warn("AML/RP sync skipped before audit export:", error.message);
-      });
-      invalidateSheetCache(scriptUrl, ["Tickets"]);
-      const [ticketRows, logRows, relationRows, attachmentRows, amlResult] = await Promise.all([
-        getSheetRows(scriptUrl, "Tickets", 5e3),
+      if (String(req.query.sync || "").toLowerCase() === "true") {
+        await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
+          console.warn("AML/RP sync skipped before audit export:", error.message);
+        });
+        invalidateSheetCache(scriptUrl, ["Tickets", "TicketBundle"]);
+      }
+      const [{ ticketRows, relationRows, attachmentRows }, logRows, amlResult] = await Promise.all([
+        getTicketBundleRows(scriptUrl, 5e3),
         getOptionalSheetRows(scriptUrl, "AuditLogs", ["TicketID", "ActionType", "ApproverID", "Stage", "Comment", "Timestamp"]),
-        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
-        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders),
         fetchJson(`${scriptUrl}?action=getAmlData`).catch(() => ({ success: true, data: [] }))
       ]);
       const allTickets = parseTicketRows(ticketRows);

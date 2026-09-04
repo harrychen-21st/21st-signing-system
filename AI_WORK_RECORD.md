@@ -12,10 +12,13 @@
 - 新增 `AttachmentChecks` 資料表合約，送出時會檢查附件欄位是否可作為查核連結；警示只標記，不阻擋送出。
 - 新增後台多條件篩選與 Excel-readable `.xls` 稽核包匯出，內容包含 Tickets、AuditLogs、Relations、AML/RP 與 Attachments。
 - `WorkflowRules` 已整理為新版「後台處理提示規則」表頭；若偵測到舊逐關規則表，Apps Script 會先備份成 `WorkflowRules_Legacy_*`，再重建新表頭。
+- 查詢效能調整：前台「我的申請」與後台清單讀取不再先阻塞式同步 AML/RP；後台新增「同步 AML/關係人」按鈕供人工需要時觸發。
+- 新增 Apps Script `getTicketBundle` 讀取動作，一次回傳 `Tickets`、`TicketRelations`、`AttachmentChecks`，降低清單讀取的 Apps Script 往返次數。
 
 ### Apps Script 操作提示
 - 更新 Apps Script 後，建議先執行 `setupRealData()`，讓 `Tickets` 補齊 AML/RP 欄位，並建立 `TicketRelations`、`AttachmentChecks` 與新版 `WorkflowRules`。
-- 若希望 AML/RP 不只在查詢時同步，可再執行 `setupAmlRpSyncTrigger()` 建立每 5 分鐘同步。
+- 更新至含 `getTicketBundle` 的 Apps Script 後，Vercel 後端才會使用合併讀取；若尚未更新，系統會退回分頁讀取但速度較慢。
+- 若希望 AML/RP 自動定期同步，可再執行 `setupAmlRpSyncTrigger()` 建立每 5 分鐘同步；也可由後台「同步 AML/關係人」按鈕手動觸發。
 - 郵件重送維持原設定：初次同步寄送失敗會寫入 `MailRetryQueue`，2 分鐘後只重送 1 次。
 
 ---

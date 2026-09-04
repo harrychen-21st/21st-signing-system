@@ -17,12 +17,14 @@ The current implemented system is an internal request intake, tracking, ticket r
 - Application number generation in Apps Script.
 - AML/related-party row synchronization and investigation email notification.
 - AML/RP result sync from the AML spreadsheet back to `Tickets` using `風控AML` and `關係人(是/否)`.
+- Backoffice manual AML/RP sync through `POST /api/backoffice/sync-aml-rp`; ticket list reads no longer block on AML/RP sync.
 - Ticket relation tracking through `TicketRelations`; `related_ticket` creates source-ticket to generated-ticket links without changing application number rules.
 - Attachment link checking through the BFF and persistent warnings in `AttachmentChecks`; warnings do not block submission.
 - Applicant request tracking with audit log display.
 - Applicant relation display uses linked ticket basic information only.
 - Rejected-ticket resubmission path with owner/admin checks.
 - Backoffice ticket list, filters, manual completion, AML/RP summary, relation summary, attachment warnings, and Excel-readable audit export.
+- Combined ticket bundle reads through Apps Script `getTicketBundle` for `Tickets`, `TicketRelations`, and `AttachmentChecks`.
 - Notice board management through `SystemSettings`.
 - Admin form/spec management and Gemini-assisted form modeling.
 - `WorkflowRules` is now a processing-rule hints table. Legacy per-stage workflow headers are archived to `WorkflowRules_Legacy_*` before the sheet is reset to the new processing-rule headers.
@@ -57,6 +59,7 @@ The current implemented system is an internal request intake, tracking, ticket r
 - Frontend route visibility and backend route authorization are not aligned everywhere.
 - Google Sheets schema changes have no migration/version mechanism.
 - Apps Script deployment process is manual and not represented in CI.
+- If Apps Script is not updated to a version that includes `getTicketBundle`, the BFF falls back to separate sheet reads and list loading will be slower.
 
 ## Environment Requirements
 
@@ -101,6 +104,7 @@ The current implemented system is an internal request intake, tracking, ticket r
 - Add schema versioning or migration notes for Google Sheets tabs.
 - Replace silent mock fallbacks on production-like routes with explicit configuration errors.
 - Add Apps Script deployment SOP and healthcheck validation.
+- Keep `apps-script-deploy-clean.js` and the live Apps Script deployment aligned after every change that touches Apps Script actions.
 
 ### P3
 
