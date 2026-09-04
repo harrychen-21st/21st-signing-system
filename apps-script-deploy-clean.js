@@ -1,6 +1,30 @@
 var SPREADSHEET_ID_PROPERTY_KEY = 'SPREADSHEET_ID';
 var SYSTEM_SENDER_EMAIL = 'auto-reply@21stfintech.com';
 var SYSTEM_SENDER_NAME = '21CD 內部申請系統';
+var TAIPEI_TIME_ZONE = 'Asia/Taipei';
+
+function formatTaipeiDateTime_(date) {
+  return Utilities.formatDate(date || new Date(), TAIPEI_TIME_ZONE, 'yyyy/MM/dd HH:mm:ss');
+}
+
+function parseTaipeiDateTime_(value) {
+  if (Object.prototype.toString.call(value) === '[object Date]' && !isNaN(value.getTime())) return value;
+
+  var text = String(value || '').trim();
+  var match = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (match) {
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6] || 0)
+    );
+  }
+
+  return new Date(text);
+}
 
 function getSpreadsheet_() {
   var id = String(PropertiesService.getScriptProperties().getProperty(SPREADSHEET_ID_PROPERTY_KEY) || '').trim();
@@ -160,7 +184,7 @@ function submitApplication_(ss, payload) {
 
   ticketsSheet.appendRow([
     applicationNumber,
-    now.toISOString(),
+    formatTaipeiDateTime_(now),
     payload.applicantEmail || '',
     payload.applicantName || '',
     payload.department || '',
@@ -176,7 +200,7 @@ function submitApplication_(ss, payload) {
   ]);
 
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp'])
-    .appendRow([applicationNumber, 'Submitted', payload.applicantEmail || '', '0', '送出申請', now.toISOString()]);
+    .appendRow([applicationNumber, 'Submitted', payload.applicantEmail || '', '0', '送出申請', formatTaipeiDateTime_(now)]);
 
   sendApplicantSubmittedEmail_({
     to: payload.applicantEmail,
@@ -265,7 +289,7 @@ function completeTicket_(ss, ticketId, completedBy, note) {
   sheet.getRange(rowIndex, 14).setValue('');
 
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp'])
-    .appendRow([ticketId, 'Completed', completedBy || '', 'END', note || '後台完成結案', new Date().toISOString()]);
+    .appendRow([ticketId, 'Completed', completedBy || '', 'END', note || '後台完成結案', formatTaipeiDateTime_(new Date())]);
 
   if (applicantEmail) {
   safeSendEmail_({
@@ -430,7 +454,7 @@ function sendApplicantSubmittedEmail_(params) {
 function saveMeetingRoom_(ss, room) {
   var sheet = ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
   var roomId = String(room.id || ('ROOM-' + new Date().getTime())).trim();
-  var now = new Date().toISOString();
+  var now = formatTaipeiDateTime_(new Date());
   var isActive = parseActiveFlag_(room.isActive);
   var row = [
     roomId,
@@ -491,8 +515,8 @@ function createMeetingBooking_(ss, booking) {
     endTime,
     purpose,
     'Booked',
-    now.toISOString(),
-    now.toISOString(),
+    formatTaipeiDateTime_(now),
+    formatTaipeiDateTime_(now),
     '',
     '',
     ''
@@ -510,7 +534,7 @@ function cancelMeetingBooking_(ss, bookingId, cancelledBy, isAdmin) {
       var owner = String(rows[i][3] || '').trim().toLowerCase();
       var actor = String(cancelledBy || '').trim().toLowerCase();
       if (!isAdmin && owner !== actor) throw new Error('只能取消自己的預約');
-      var now = new Date().toISOString();
+      var now = formatTaipeiDateTime_(new Date());
       sheet.getRange(i + 1, 11).setValue('Cancelled');
       sheet.getRange(i + 1, 13).setValue(now);
       sheet.getRange(i + 1, 14).setValue(now);
@@ -793,7 +817,7 @@ function enqueueMailRetry_(message, error) {
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][0] || '') === retryKey && String(rows[i][7] || '') === 'PendingRetry') {
       sheet.getRange(i + 1, 9).setValue(String(error));
-      sheet.getRange(i + 1, 11).setValue(now.toISOString());
+      sheet.getRange(i + 1, 11).setValue(formatTaipeiDateTime_(now));
       return;
     }
   }
@@ -804,11 +828,11 @@ function enqueueMailRetry_(message, error) {
     String(message.body || ''),
     String(message.name || SYSTEM_SENDER_NAME),
     1,
-    nextAttemptAt.toISOString(),
+    formatTaipeiDateTime_(nextAttemptAt),
     'PendingRetry',
     String(error),
-    now.toISOString(),
-    now.toISOString()
+    formatTaipeiDateTime_(now),
+    formatTaipeiDateTime_(now)
   ]);
 }
 
@@ -820,7 +844,7 @@ function processMailRetryQueue() {
   for (var i = 1; i < rows.length; i++) {
     var status = String(rows[i][7] || '');
     var attempts = Number(rows[i][5] || 0);
-    var nextAttemptAt = new Date(String(rows[i][6] || ''));
+    var nextAttemptAt = parseTaipeiDateTime_(rows[i][6]);
     if (status !== 'PendingRetry') continue;
     if (attempts >= 2) continue;
     if (isNaN(nextAttemptAt.getTime()) || nextAttemptAt.getTime() > now.getTime()) continue;
@@ -833,13 +857,13 @@ function processMailRetryQueue() {
       sheet.getRange(i + 1, 6).setValue(2);
       sheet.getRange(i + 1, 8).setValue('RetrySucceeded');
       sheet.getRange(i + 1, 9).setValue('');
-      sheet.getRange(i + 1, 11).setValue(now.toISOString());
+      sheet.getRange(i + 1, 11).setValue(formatTaipeiDateTime_(now));
       finalizeMailRetryContext_(ss, String(rows[i][0] || ''), true);
     } catch (error) {
       sheet.getRange(i + 1, 6).setValue(2);
       sheet.getRange(i + 1, 8).setValue('RetryFailedFinal');
       sheet.getRange(i + 1, 9).setValue(String(error));
-      sheet.getRange(i + 1, 11).setValue(now.toISOString());
+      sheet.getRange(i + 1, 11).setValue(formatTaipeiDateTime_(now));
       finalizeMailRetryContext_(ss, String(rows[i][0] || ''), false);
     }
   }
