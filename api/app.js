@@ -886,6 +886,8 @@ async function createApp() {
 | \u6B04\u4F4D ID | \u6B04\u4F4D\u540D\u7A31 | \u6B04\u4F4D\u578B\u614B | \u5FC5\u586B | \u8AAA\u660E/\u52D5\u614B\u986F\u793A\u689D\u4EF6 |
 | :--- | :--- | :--- | :--- | :--- |
 | **related_ticket** | \u76F8\u95DC\u55AE\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u672C\u7533\u8ACB\u5EF6\u7E8C\u6216\u88DC\u5145\u65E2\u6709\u55AE\u865F\uFF0C\u8ACB\u586B\u5165\u4F86\u6E90\u55AE\u865F\u4EE5\u5229\u52FE\u7A3D |
+| **related_case_no** | \u76F8\u95DC\u6848\u4EF6\u7DE8\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u53EF\u586B\u5165\u5167\u90E8\u7CFB\u7D71\u6848\u4EF6\u7DE8\u865F\uFF0C\u4F8B\u5982 14 \u78BC\u6848\u4EF6\u865F\uFF1B\u4E0D\u7B49\u540C\u65BC\u5176\u4ED6\u7533\u8ACB\u55AE\u865F |
+| **estimated_amount** | \u9810\u4F30\u91D1\u984D | \u6578\u503C | \u5426 | \u672C\u6848\u9810\u4F30\u91D1\u984D\uFF0C\u6703\u540C\u6B65\u4F5C\u70BA\u5F8C\u53F0\u8207\u532F\u51FA\u4F7F\u7528\u7684\u91D1\u984D\u6B04\u4F4D |
 | **subject** | \u4E3B\u65E8 | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u7C21\u8FF0\u7C3D\u5448\u4E4B\u4E3B\u65E8\u8207\u4E3B\u8981\u76EE\u7684 |
 | **description** | \u5167\u5BB9\u8AAA\u660E | \u591A\u884C\u6587\u5B57 | \u662F | \u8A73\u7D30\u8AAA\u660E\u672C\u7C3D\u5448\u4E4B\u539F\u56E0\u3001\u5167\u5BB9\u8207\u80CC\u666F |
 | **attachment** | \u9644\u4EF6\u4E0A\u50B3 | \u55AE\u884C\u6587\u5B57 | \u5426 | \u8ACB\u8CBC\u4E0A\u76F8\u95DC\u96F2\u7AEF\u9023\u7D50\u6216\u8CC7\u6599\u593E\u8DEF\u5F91 |
@@ -893,7 +895,8 @@ async function createApp() {
 | **external_collab** | \u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u662F\u300D\u6216\u300C\u5426\u300D |
 | **ext_tax_id** | \u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u8F38\u5165\u5F8C\u81EA\u52D5\u5E36\u5165\u5EE0\u5546\u8207\u8CA0\u8CAC\u4EBA\u8CC7\u6599 |
 | **ext_company_name** | \u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31 | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |
-| **ext_company_owner** | \u8CA0\u8CAC\u4EBA\u59D3\u540D | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |`,
+| **ext_company_owner** | \u8CA0\u8CAC\u4EBA\u59D3\u540D | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |
+| **applicant_related_party** | \u662F\u5426\u70BA\u95DC\u4FC2\u4EBA | \u4E0B\u62C9\u9078\u55AE | \u5426 | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u4F9B\u7533\u8ACB\u4EBA\u81EA\u8A55\u7559\u75D5\uFF1B\u4E0D\u53D6\u4EE3 AML DB \u67E5\u6838\u7D50\u679C |`,
         logicMarkdown: `# \u7C3D\u5448\u55AE (AP) \u5F8C\u53F0\u8655\u7406\u898F\u5247
 
 \u7CFB\u7D71\u8CA0\u8CAC\u7522\u751F\u55AE\u865F\u3001\u4FDD\u5B58\u7533\u8ACB\u7D00\u9304\u3001\u5EFA\u7ACB\u95DC\u806F\u7DDA\u7D22\uFF0C\u4E26\u5728\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u6642\u5EFA\u7ACB AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5\u8CC7\u6599\u3002
@@ -920,6 +923,8 @@ graph TD
         configJSON: {
           fields: [
             { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u9078\u586B)", type: "text", required: false },
+            { id: "related_case_no", label: "\u76F8\u95DC\u6848\u4EF6\u7DE8\u865F", type: "text", required: false },
+            { id: "estimated_amount", label: "\u9810\u4F30\u91D1\u984D", type: "number", required: false },
             { id: "subject", label: "\u4E3B\u65E8", type: "text", required: true },
             { id: "description", label: "\u5167\u5BB9\u8AAA\u660E", type: "textarea", required: true },
             { id: "attachment", label: "\u9644\u4EF6\u4E0A\u50B3 (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF\u9023\u7D50)", type: "text", required: false },
@@ -927,7 +932,8 @@ graph TD
             { id: "external_collab", label: "\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546", type: "select", options: ["\u5426", "\u662F"], required: true },
             { id: "ext_tax_id", label: "\u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
             { id: "ext_company_name", label: "\u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
-            { id: "ext_company_owner", label: "\u8CA0\u8CAC\u4EBA\u59D3\u540D", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } }
+            { id: "ext_company_owner", label: "\u8CA0\u8CAC\u4EBA\u59D3\u540D", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
+            { id: "applicant_related_party", label: "\u662F\u5426\u70BA\u95DC\u4FC2\u4EBA", type: "select", options: ["\u5426", "\u662F"], required: false, showIf: { field: "external_collab", value: "\u662F" } }
           ]
         }
       },
@@ -1426,7 +1432,7 @@ graph TD
       const workbook = buildExcelWorkbook([
         {
           name: "Tickets",
-          headers: ["\u55AE\u865F", "\u5EFA\u7ACB\u6642\u9593", "\u7533\u8ACB\u4EBA", "\u90E8\u9580", "\u8868\u55AE", "\u72C0\u614B", "\u4E3B\u65E8", "\u91D1\u984D", "\u7D71\u7DE8", "\u5546\u5BB6", "AML\u7D50\u679C", "\u95DC\u4FC2\u4EBA\u7D50\u679C", "\u95DC\u806F\u6578", "\u9644\u4EF6\u8B66\u793A\u6578"],
+          headers: ["\u55AE\u865F", "\u5EFA\u7ACB\u6642\u9593", "\u7533\u8ACB\u4EBA", "\u90E8\u9580", "\u8868\u55AE", "\u72C0\u614B", "\u4E3B\u65E8", "\u91D1\u984D", "\u76F8\u95DC\u6848\u4EF6\u7DE8\u865F", "\u7D71\u7DE8", "\u5546\u5BB6", "\u7533\u8ACB\u4EBA\u81EA\u8A55\u95DC\u4FC2\u4EBA", "AML\u7D50\u679C", "\u95DC\u4FC2\u4EBA\u7D50\u679C", "\u95DC\u806F\u6578", "\u9644\u4EF6\u8B66\u793A\u6578"],
           rows: tickets.map((ticket) => [
             ticket.id,
             ticket.createdAt,
@@ -1436,8 +1442,10 @@ graph TD
             ticket.status,
             ticket.subject,
             ticket.amount,
+            ticket.formData?.related_case_no || "",
             ticket.formData?.ext_tax_id || "",
             ticket.formData?.ext_company_name || ticket.formData?.vendor_name || "",
+            ticket.formData?.applicant_related_party || "",
             ticket.amlResult,
             normalizeRpDisplay(ticket.rpResult),
             relationMap.get(ticket.id)?.length || 0,

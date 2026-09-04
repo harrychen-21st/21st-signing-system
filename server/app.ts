@@ -1092,6 +1092,8 @@ export async function createApp() {
 | 欄位 ID | 欄位名稱 | 欄位型態 | 必填 | 說明/動態顯示條件 |
 | :--- | :--- | :--- | :--- | :--- |
 | **related_ticket** | 相關單號 | 單行文字 | 否 | 若本申請延續或補充既有單號，請填入來源單號以利勾稽 |
+| **related_case_no** | 相關案件編號 | 單行文字 | 否 | 可填入內部系統案件編號，例如 14 碼案件號；不等同於其他申請單號 |
+| **estimated_amount** | 預估金額 | 數值 | 否 | 本案預估金額，會同步作為後台與匯出使用的金額欄位 |
 | **subject** | 主旨 | 單行文字 | 是 | 請簡述簽呈之主旨與主要目的 |
 | **description** | 內容說明 | 多行文字 | 是 | 詳細說明本簽呈之原因、內容與背景 |
 | **attachment** | 附件上傳 | 單行文字 | 否 | 請貼上相關雲端連結或資料夾路徑 |
@@ -1099,7 +1101,8 @@ export async function createApp() {
 | **external_collab** | 是否涉及外部合作廠商 | 下拉選單 | 是 | 可選擇「是」或「否」 |
 | **ext_tax_id** | 統一編號/識別碼 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，輸入後自動帶入廠商與負責人資料 |
 | **ext_company_name** | 廠商名稱/公司名稱 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |
-| **ext_company_owner** | 負責人姓名 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |`,
+| **ext_company_owner** | 負責人姓名 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |
+| **applicant_related_party** | 是否為關係人 | 下拉選單 | 否 | 當「是否涉及外部合作廠商」選擇「是」時顯示，供申請人自評留痕；不取代 AML DB 查核結果 |`,
         logicMarkdown: `# 簽呈單 (AP) 後台處理規則
 
 系統負責產生單號、保存申請紀錄、建立關聯線索，並在涉及外部合作廠商時建立 AML/關係人調查資料。
@@ -1126,6 +1129,8 @@ graph TD
         configJSON: {
           fields: [
             { id: "related_ticket", label: "相關單號 (選填)", type: "text", required: false },
+            { id: "related_case_no", label: "相關案件編號", type: "text", required: false },
+            { id: "estimated_amount", label: "預估金額", type: "number", required: false },
             { id: "subject", label: "主旨", type: "text", required: true },
             { id: "description", label: "內容說明", type: "textarea", required: true },
             { id: "attachment", label: "附件上傳 (請貼上雲端連結)", type: "text", required: false },
@@ -1133,7 +1138,8 @@ graph TD
             { id: "external_collab", label: "是否涉及外部合作廠商", type: "select", options: ["否", "是"], required: true },
             { id: "ext_tax_id", label: "統一編號/識別碼", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
             { id: "ext_company_name", label: "廠商名稱/公司名稱", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
-            { id: "ext_company_owner", label: "負責人姓名", type: "text", required: true, showIf: { field: "external_collab", value: "是" } }
+            { id: "ext_company_owner", label: "負責人姓名", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
+            { id: "applicant_related_party", label: "是否為關係人", type: "select", options: ["否", "是"], required: false, showIf: { field: "external_collab", value: "是" } }
           ]
         }
       },
@@ -1702,7 +1708,7 @@ graph TD
       const workbook = buildExcelWorkbook([
         {
           name: 'Tickets',
-          headers: ['單號', '建立時間', '申請人', '部門', '表單', '狀態', '主旨', '金額', '統編', '商家', 'AML結果', '關係人結果', '關聯數', '附件警示數'],
+          headers: ['單號', '建立時間', '申請人', '部門', '表單', '狀態', '主旨', '金額', '相關案件編號', '統編', '商家', '申請人自評關係人', 'AML結果', '關係人結果', '關聯數', '附件警示數'],
           rows: tickets.map((ticket) => [
             ticket.id,
             ticket.createdAt,
@@ -1712,8 +1718,10 @@ graph TD
             ticket.status,
             ticket.subject,
             ticket.amount,
+            ticket.formData?.related_case_no || '',
             ticket.formData?.ext_tax_id || '',
             ticket.formData?.ext_company_name || ticket.formData?.vendor_name || '',
+            ticket.formData?.applicant_related_party || '',
             ticket.amlResult,
             normalizeRpDisplay(ticket.rpResult),
             relationMap.get(ticket.id)?.length || 0,

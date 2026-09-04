@@ -238,11 +238,11 @@ function submitApplication_(ss, payload) {
     NeedsAML: formData.external_collab === '是' ? 'TRUE' : 'FALSE',
     FormData_JSON: JSON.stringify(formData),
     CurrentApprover: '',
-    AML_Result: '',
-    AML_Comment: '',
-    RP_Result: '',
-    RP_Comment: '',
-    AML_LastSyncedAt: ''
+    AML_Result: amlStatus.amlResult || '',
+    AML_Comment: amlStatus.amlComment || '',
+    RP_Result: amlStatus.rpResult || '',
+    RP_Comment: amlStatus.rpComment || '',
+    AML_LastSyncedAt: amlStatus.hasPreviousRecord ? formatTaipeiDateTime_(now) : ''
   }));
 
   createTicketRelations_(ss, {
@@ -593,7 +593,16 @@ function syncAmlInvestigation_(ss, record) {
     adminStatus = shouldNotifyAdmin ? nextStatus : adminStatus;
     riskStatus = shouldNotifyRisk ? nextStatus : riskStatus;
   }
-  return { needsInvestigation: needsInvestigation, adminStatus: adminStatus, riskStatus: riskStatus };
+  return {
+    needsInvestigation: needsInvestigation,
+    adminStatus: adminStatus,
+    riskStatus: riskStatus,
+    hasPreviousRecord: !!previous,
+    amlResult: previous ? previous.amlResult : '',
+    amlComment: previous ? previous.amlComment : '',
+    rpResult: previous ? previous.rpResult : '',
+    rpComment: previous ? previous.rpComment : ''
+  };
 }
 
 function needsAmlNotification_(status) {
@@ -613,13 +622,22 @@ function findPreviousAmlRecord_(sheet, taxId) {
   var rows = sheet.getDataRange().getValues();
   var indexes = mapHeaderIndexes_(rows[0]);
   var taxIndex = indexes['統一編號'];
+  if (taxIndex == null) taxIndex = indexes['統編'];
+  if (taxIndex == null) return null;
   var adminIndex = indexes['通知管理處查詢'];
   var riskIndex = indexes['通知風控查詢'];
+  var amlIndex = indexes['風控AML'];
+  var amlCommentIndex = indexes['備註'];
+  var rpIndex = indexes['關係人(是/否)'];
   for (var i = rows.length - 1; i >= 1; i--) {
     if (String(rows[i][taxIndex] || '').trim() === String(taxId).trim()) {
       return {
         adminStatus: adminIndex == null ? '' : String(rows[i][adminIndex] || '').trim(),
-        riskStatus: riskIndex == null ? '' : String(rows[i][riskIndex] || '').trim()
+        riskStatus: riskIndex == null ? '' : String(rows[i][riskIndex] || '').trim(),
+        amlResult: amlIndex == null ? '' : String(rows[i][amlIndex] || '').trim(),
+        amlComment: amlCommentIndex == null ? '' : String(rows[i][amlCommentIndex] || '').trim(),
+        rpResult: rpIndex == null ? '' : String(rows[i][rpIndex] || '').trim(),
+        rpComment: amlCommentIndex == null ? '' : String(rows[i][amlCommentIndex] || '').trim()
       };
     }
   }

@@ -32,6 +32,9 @@ type SubmittedTicket = {
     needsInvestigation?: boolean;
     adminStatus?: string;
     riskStatus?: string;
+    hasPreviousRecord?: boolean;
+    amlResult?: string;
+    rpResult?: string;
     skipped?: boolean;
   };
   attachmentWarnings?: {
@@ -62,6 +65,8 @@ const fieldLabels: Record<string, string> = {
   attachment: '附件',
   attachment_version_note: '附件版本/補充說明',
   related_ticket: '相關單號',
+  related_case_no: '相關案件編號',
+  estimated_amount: '預估金額',
   amount: '金額',
   vendor_name: '廠商名稱',
   payment_date: '付款期限',
@@ -71,6 +76,7 @@ const fieldLabels: Record<string, string> = {
   ext_tax_id: '統一編號',
   ext_company_name: '商家名稱',
   ext_company_owner: '負責人姓名',
+  applicant_related_party: '是否為關係人',
 };
 
 function parseNoticeBoard(value: string): NoticeItem[] | null {
@@ -115,16 +121,37 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
+function normalizeCheckText(value: unknown) {
+  return String(value || '').trim();
+}
+
+function deriveAmlCountersign(amlStatus?: SubmittedTicket['amlStatus']) {
+  const passedAmlText = '沒有找到任何紀錄，OK';
+  const nonRelatedText = '經管理處查核非屬關係人交易，且經第三方確認查無反社會或暴力團體相關負面新聞';
+  const relatedPassedText = '經管理處查核為關係人交易且已過關係人會議，且經第三方確認查無反社會或暴力團體相關負面新聞';
+  const amlResult = normalizeCheckText(amlStatus?.amlResult);
+  const rpResult = normalizeCheckText(amlStatus?.rpResult);
+
+  if (amlStatus?.hasPreviousRecord && amlResult === passedAmlText && rpResult === '否') {
+    return { mode: 'text' as const, text: nonRelatedText };
+  }
+  if (amlStatus?.hasPreviousRecord && amlResult === passedAmlText && rpResult.includes('已過關係人會議')) {
+    return { mode: 'text' as const, text: relatedPassedText };
+  }
+  return { mode: 'checkbox' as const, text: relatedPassedText };
+}
+
 function isLongPrintField(key: string) {
   const label = fieldLabels[key] || key;
   return key === 'description' || label.includes('說明') || label.includes('用途') || label.includes('內容');
 }
 
 function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
-  const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email', 'expense_category']);
+  const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email', 'expense_category', 'related_case_no', 'estimated_amount']);
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
   const formTypeDisplay = ticket.formTypeName || ticket.formType;
   const needsAdminCountersign = ticket.formData.external_collab === '是';
+  const amlCountersign = deriveAmlCountersign(ticket.amlStatus);
   const handlingUnitText = ticket.formType === 'CS' ? '管理處(法務)：請補充法務確認或 Email 紀錄' : '';
 
   return (
@@ -158,6 +185,18 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
             <div className="text-[10px] font-semibold text-slate-500">填表日期</div>
             <div className="font-semibold">{new Date(ticket.createdAt).toLocaleString()}</div>
           </div>
+          {ticket.formType === 'AP' && (
+            <>
+              <div className="col-span-2">
+                <div className="text-[10px] font-semibold text-slate-500">相關案件編號</div>
+                <div className="font-semibold">{displayValue(ticket.formData.related_case_no)}</div>
+              </div>
+              <div className="col-span-2">
+                <div className="text-[10px] font-semibold text-slate-500">預估金額</div>
+                <div className="font-semibold">{displayValue(ticket.formData.estimated_amount)}</div>
+              </div>
+            </>
+          )}
         </div>
       </section>
 
@@ -209,10 +248,14 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
             <div className="font-semibold text-slate-700">處理單位：管理處 / 風控</div>
           </div>
           <div className="space-y-1.5 text-[11px] leading-5">
-            <label className="flex items-start gap-2">
-              <span className="mt-0.5 inline-block h-3.5 w-3.5 shrink-0 border border-slate-500"></span>
-              <span>經管理處查核非屬關係人交易，且經第三方確認查無反社會或暴力團體相關負面新聞</span>
-            </label>
+            {amlCountersign.mode === 'text' ? (
+              <p className="font-semibold text-slate-900">{amlCountersign.text}</p>
+            ) : (
+              <label className="flex items-start gap-2">
+                <span className="mt-0.5 inline-block h-3.5 w-3.5 shrink-0 border border-slate-500"></span>
+                <span>{amlCountersign.text}</span>
+              </label>
+            )}
             <label className="flex items-start gap-2">
               <span className="mt-0.5 inline-block h-3.5 w-3.5 shrink-0 border border-slate-500"></span>
               <span>其他：</span>
@@ -225,6 +268,23 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
           </div>
         </section>
       )}
+
+      <section className="print-section mb-4">
+        <h2 className="mb-2 text-sm font-bold text-slate-900">簽核欄位</h2>
+        <div className="grid grid-cols-3 overflow-hidden rounded-md border border-slate-300">
+          {['', '', ''].map((_, index) => (
+            <div key={index} className="min-h-[104px] border-r border-slate-300 px-3 py-2 last:border-r-0">
+              <div className="h-16"></div>
+              <div className="border-t border-slate-300 pt-2 text-left text-[11px] leading-5 text-slate-700">
+                <div>簽核：</div>
+                <div>日期：</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="print-page-number">第 1 頁 / 共 1 頁</div>
     </div>
   );
 }
@@ -269,6 +329,7 @@ export default function SubmitForm({ user }: { user: any }) {
         delete next.ext_tax_id;
         delete next.ext_company_name;
         delete next.ext_company_owner;
+        delete next.applicant_related_party;
         setUbnSuccess(false);
       }
       return next;
@@ -311,7 +372,7 @@ export default function SubmitForm({ user }: { user: any }) {
       String(dynamicData.subject || '').trim() ||
       `${formTypesData.find((form) => form.id === formType)?.name || formType} - ${user.name}`;
     const formTypeName = formTypesData.find((form) => form.id === formType)?.name || formType;
-    const amount = dynamicData.amount ? String(dynamicData.amount) : '';
+    const amount = dynamicData.estimated_amount ? String(dynamicData.estimated_amount) : (dynamicData.amount ? String(dynamicData.amount) : '');
 
     try {
       const response = await authFetch('/api/submit-approval', {

@@ -174,4 +174,12 @@
     page-break-inside: auto;
     overflow-wrap: anywhere;
   }
+
+  .print-page-number {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    font-size: 10px;
+    color: #475569;
+  }
 }

@@ -62,6 +62,7 @@ interface AttachmentWarning {
 }
 
 const hiddenFormFields = new Set(['ALWAYS', 'expense_category']);
+const hiddenPrintableFormFields = new Set([...hiddenFormFields, 'related_case_no', 'estimated_amount']);
 
 const isCompletedStatus = (status: string) => ['Completed', 'Approved'].includes(status);
 
@@ -85,6 +86,18 @@ const displayAuditAction = (action: string) => {
 const displayCheckValue = (value?: string) => {
   const text = String(value || '').trim();
   return text || '尚無資料';
+};
+
+const deriveAmlCountersign = (amlResult?: string, rpResult?: string) => {
+  const passedAmlText = '沒有找到任何紀錄，OK';
+  const nonRelatedText = '經管理處查核非屬關係人交易，且經第三方確認查無反社會或暴力團體相關負面新聞';
+  const relatedPassedText = '經管理處查核為關係人交易且已過關係人會議，且經第三方確認查無反社會或暴力團體相關負面新聞';
+  const aml = String(amlResult || '').trim();
+  const rp = String(rpResult || '').trim();
+
+  if (aml === passedAmlText && rp === '否') return { mode: 'text' as const, text: nonRelatedText };
+  if (aml === passedAmlText && rp.includes('已過關係人會議')) return { mode: 'text' as const, text: relatedPassedText };
+  return { mode: 'checkbox' as const, text: relatedPassedText };
 };
 
 const deriveTicketStateFromLogs = (logs: AuditLog[]) => {
@@ -120,7 +133,7 @@ function matchesTicketSearch(ticket: MyTicket, query: string) {
 }
 
 const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
-  const formFields = Object.entries(ticket.formData || {}).filter(([k]) => !hiddenFormFields.has(k));
+  const formFields = Object.entries(ticket.formData || {}).filter(([k]) => !hiddenPrintableFormFields.has(k));
   
   // A mapping to translate some known field keys to readable labels if we want, mostly they will show their real values
   const getLabel = (key: string) => {
@@ -131,6 +144,14 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       ext_company_name: '外部公司名稱',
       ext_company_owner: '外部公司負責人',
       ext_tax_id: '統編',
+      applicant_related_party: '是否為關係人',
+      related_ticket: '相關單號',
+      related_case_no: '相關案件編號',
+      estimated_amount: '預估金額',
+      subject: '主旨',
+      description: '內容說明',
+      attachment: '附件',
+      attachment_version_note: '附件版本/補充說明',
       rd_ref_id: '對應案號/簽呈單號',
       rd_expense_type: '請款項目',
       amount: '請款金額',
@@ -145,6 +166,8 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
     };
     return labels[key] || key;
   };
+  const needsAdminCountersign = ticket.formData?.external_collab === '是';
+  const amlCountersign = deriveAmlCountersign(ticket.amlResult, ticket.rpResult);
 
   const formNameMapping: Record<string, string> = {
     'AP': '簽呈單 (AP)',
@@ -166,6 +189,12 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
           <div><span className="font-bold">所屬部門：</span> {ticket.dept}</div>
           <div><span className="font-bold">申請時間：</span> {new Date(ticket.createdAt).toLocaleString()}</div>
           <div><span className="font-bold">表單狀態：</span> {displayStatus(ticket.status)}</div>
+          {ticket.formType === 'AP' && (
+            <>
+              <div><span className="font-bold">相關案件編號：</span> {ticket.formData?.related_case_no || '-'}</div>
+              <div><span className="font-bold">預估金額：</span> {ticket.formData?.estimated_amount || ticket.amount || '-'}</div>
+            </>
+          )}
         </div>
       </div>
 
@@ -181,6 +210,35 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {needsAdminCountersign && (
+        <div className="mb-8 p-4 border border-gray-300">
+          <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">AML / 關係人調查會簽</h2>
+          {amlCountersign.mode === 'text' ? (
+            <p className="font-bold">{amlCountersign.text}</p>
+          ) : (
+            <div className="flex items-start gap-2">
+              <span className="mt-1 inline-block h-4 w-4 shrink-0 border border-gray-700"></span>
+              <span>{amlCountersign.text}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mb-8">
+        <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">簽核欄位</h2>
+        <div className="grid grid-cols-3 border border-gray-300">
+          {['', '', ''].map((_, index) => (
+            <div key={index} className="min-h-[104px] border-r border-gray-300 px-3 py-2 last:border-r-0">
+              <div className="h-16"></div>
+              <div className="border-t border-gray-300 pt-2 text-left text-sm leading-6 text-gray-700">
+                <div>簽核：</div>
+                <div>日期：</div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div>
@@ -216,6 +274,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       <div className="mt-16 pt-8 border-t border-gray-400 text-center text-sm text-gray-500">
         此為系統自動產生之數位軌跡證明・列印時間：{new Date().toLocaleString()}
       </div>
+      <div className="print-page-number">第 1 頁 / 共 1 頁</div>
     </div>
   );
 };
@@ -262,7 +321,7 @@ export default function TrackDashboard({ user }: { user: any }) {
         body: JSON.stringify({
           applicantEmail: editTicket.applicantEmail,
           formData: editFormData,
-          amount: editFormData.amount || editTicket.amount,
+          amount: editFormData.estimated_amount || editFormData.amount || editTicket.amount,
           subject: editTicket.subject
         })
       });

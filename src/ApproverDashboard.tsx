@@ -411,10 +411,12 @@ export default function ApproverDashboard({ user }: { user: any }) {
                   <div>需求單位：{ticket.dept}</div>
                   <div>填表日期：{new Date(ticket.createdAt).toLocaleString()}</div>
                   <div>金額：{ticket.amount || '-'}</div>
+                  {ticket.formType === 'AP' && <div>相關案件編號：{valueOf(ticket, 'related_case_no')}</div>}
                   <div>統編：{valueOf(ticket, 'ext_tax_id')}</div>
                   <div>商家名稱：{valueOf(ticket, 'ext_company_name')}</div>
                   <div>負責人姓名：{valueOf(ticket, 'ext_company_owner')}</div>
                   <div>是否涉及外部公司：{valueOf(ticket, 'external_collab')}</div>
+                  {ticket.formType === 'AP' && <div>申請人自評關係人：{valueOf(ticket, 'applicant_related_party')}</div>}
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 pt-2">
