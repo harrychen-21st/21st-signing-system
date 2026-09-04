@@ -730,9 +730,7 @@ async function createApp() {
       return res.json({ value: "\u6B61\u8FCE\u4F7F\u7528\u4F01\u696D\u5167\u90E8\u7533\u8ACB\u7BA1\u7406\u7CFB\u7D71\uFF01\n\n- \u82E5\u6709\u4EFB\u4F55\u7CFB\u7D71\u64CD\u4F5C\u554F\u984C\uFF0C\u8ACB\u806F\u7E6B [IT \u8CC7\u8A0A\u8655](#)\u3002\n- [\u9EDE\u64CA\u6B64\u8655\u67E5\u770B\u7533\u8ACB\u6D41\u7A0B\u898F\u7BC4\u6587\u4EF6](#)" });
     }
     try {
-      const response = await fetch(`${scriptUrl}?action=getData&sheet=SystemSettings`);
-      const data = await response.json();
-      const rows = data.data || [];
+      const rows = await getOptionalSheetRows(scriptUrl, "SystemSettings", ["Key", "Value"]);
       const settingRow = rows.find((r) => r[0] === key);
       res.json({ value: settingRow ? settingRow[1] : "" });
     } catch (error) {
@@ -746,21 +744,15 @@ async function createApp() {
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) return res.json({ success: true });
     try {
-      const payload = {
+      await postToAppsScript(scriptUrl, {
         action: "saveData",
         sheet: "SystemSettings",
         matchColumn: 1,
         // Key
         matchValue: key,
         row: [key, value]
-      };
-      const response = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
       });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
+      invalidateSheetCache(scriptUrl, ["SystemSettings"]);
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving setting:", error);
@@ -861,9 +853,7 @@ async function createApp() {
       return res.json({ formTypes: defaultFormTypes });
     }
     try {
-      const response = await fetch(`${scriptUrl}?action=getFormTypes`);
-      const data = await response.json();
-      const rows = data.data || [];
+      const rows = await getOptionalSheetRows(scriptUrl, "FormTypes", ["FormID", "FormName"]);
       const formTypes = rows.slice(1).map((r) => ({ id: r[0], name: r[1] })).filter((form) => form.id && form.name);
       res.json({ formTypes: formTypes.length ? formTypes : defaultFormTypes });
     } catch (error) {
@@ -877,13 +867,8 @@ async function createApp() {
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) return res.json({ success: true });
     try {
-      const response = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "addFormType", formId: id, formName: name })
-      });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
+      await postToAppsScript(scriptUrl, { action: "addFormType", formId: id, formName: name });
+      invalidateSheetCache(scriptUrl, ["FormTypes"]);
       res.json({ success: true });
     } catch (error) {
       console.error("Error adding form type:", error);
@@ -1060,9 +1045,7 @@ graph TD
       return res.json({ definitions: localDefinitions });
     }
     try {
-      const response = await fetch(`${scriptUrl}?action=getData&sheet=FormDefinitions`);
-      const data = await response.json();
-      const rows = data.data || [];
+      const rows = await getOptionalSheetRows(scriptUrl, "FormDefinitions", ["FormID", "FieldsMarkdown", "LogicMarkdown", "ConfigJSON"]);
       const fetchedDefinitions = rows.slice(1).map((r) => {
         const formId = r[0];
         const configJSON = r[3] ? JSON.parse(r[3]) : null;
@@ -1104,21 +1087,15 @@ graph TD
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) return res.status(500).json({ error: "GAS URL not configured" });
     try {
-      const payload = {
+      await postToAppsScript(scriptUrl, {
         action: "saveData",
         sheet: "FormDefinitions",
         matchColumn: 1,
         // FormID
         matchValue: formId,
         row: [formId, fieldsMarkdown, logicMarkdown, JSON.stringify(configJSON)]
-      };
-      const response = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
       });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
+      invalidateSheetCache(scriptUrl, ["FormDefinitions"]);
       res.json({ success: true });
     } catch (error) {
       console.error("Error saving form definition:", error);
