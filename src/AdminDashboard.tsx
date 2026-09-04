@@ -348,7 +348,7 @@ export default function AdminDashboard({ user }: { user: any }) {
                         <span className="bg-indigo-100 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-tighter">Specs Sheet</span>
                         <h4 className="text-xl font-bold text-slate-800">{formTypes.find(f => f.id === activeFormId)?.name}</h4>
                       </div>
-                      <p className="text-xs text-slate-400 font-medium tracking-wide">目前生效中的欄位定義與簽核邏輯</p>
+                      <p className="text-xs text-slate-400 font-medium tracking-wide">目前生效中的欄位定義與後台處理規則</p>
                     </div>
                     {activeFormId && (
                         <button 
@@ -382,7 +382,7 @@ export default function AdminDashboard({ user }: { user: any }) {
                       </div>
                       <div className="space-y-4">
                         <h5 className="text-[10px] uppercase font-black text-indigo-500 flex items-center gap-2 tracking-[0.2em] mb-4">
-                          <GitMerge size={14} /> 簽核邏輯 (Logic Matrix)
+                          <GitMerge size={14} /> 後台處理規則 (Logic Matrix)
                         </h5>
                         {isEditingSpecs ? (
                             <textarea 
@@ -445,7 +445,7 @@ export default function AdminDashboard({ user }: { user: any }) {
                         </label>
                         <textarea 
                         rows={6}
-                        placeholder="請詳細描述您的欄位要求、順序與簽核關卡邏輯...&#10;範例：欄位需要請假天數、職務代理人。簽核第一關給直屬主管，若天數超過三天要再給總經理。"
+                        placeholder="請詳細描述您的欄位要求、順序與後台處理或勾稽規則...&#10;範例：欄位需要合作對象、合約金額、來源單號。若涉及外部公司，需提醒管理處與風控查核。"
                         className="form-input text-base p-8 rounded-3xl !bg-indigo-50/20 !border-indigo-100 focus:!border-indigo-500 shadow-inner min-h-[220px]"
                         value={aiPrompt}
                         onChange={e => setAiPrompt(e.target.value)}
@@ -478,7 +478,7 @@ export default function AdminDashboard({ user }: { user: any }) {
                           </div>
                           <div className="bg-white/95 backdrop-blur-xl p-8 rounded-3xl shadow-2xl prose prose-slate prose-sm max-w-none">
                              <h5 className="font-black text-indigo-600 mb-6 border-b border-indigo-50 pb-3 flex items-center gap-2">
-                                <GitMerge size={16}/> 簽核邏輯分支
+                                <GitMerge size={16}/> 後台處理規則
                              </h5>
                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{tempSpecs.logicMarkdown}</ReactMarkdown>
                           </div>

@@ -116,11 +116,9 @@ function isLongPrintField(key: string) {
 function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email', 'expense_category']);
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
-  const signers = ['董事長', '總經理', '管理本部長', '單位本部長', '單位處主管', '申請人'];
   const formTypeDisplay = ticket.formTypeName || ticket.formType;
   const needsAdminCountersign = ticket.formData.external_collab === '是';
-  const isSealApplication = ticket.formType === 'CS';
-  const countersignUnitText = isSealApplication ? '管理處(法務)：請提供法務簽核或Email紀錄' : '';
+  const handlingUnitText = ticket.formType === 'CS' ? '管理處(法務)：請補充法務確認或 Email 紀錄' : '';
 
   return (
     <div className="print-page hidden print:block bg-white text-slate-950 text-[12px] leading-relaxed">
@@ -188,11 +186,11 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
       </section>
 
       <section className="print-section mb-4">
-        <h2 className="mb-2 text-sm font-bold text-slate-900">會簽紀錄</h2>
+        <h2 className="mb-2 text-sm font-bold text-slate-900">內部處理紀錄</h2>
         <div className="grid grid-cols-[96px_1fr] overflow-hidden rounded-md border border-slate-300">
-          <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">會簽單位</div>
-          <div className="px-3 py-2 min-h-8 font-semibold text-slate-900">{countersignUnitText}</div>
-          <div className="border-r border-t border-slate-300 bg-slate-100 px-3 py-2 font-semibold">簽核與日期</div>
+          <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">處理單位</div>
+          <div className="px-3 py-2 min-h-8 font-semibold text-slate-900">{handlingUnitText}</div>
+          <div className="border-r border-t border-slate-300 bg-slate-100 px-3 py-2 font-semibold">紀錄與日期</div>
           <div className="border-t border-slate-300 px-3 py-2 min-h-10"></div>
         </div>
       </section>
@@ -200,8 +198,8 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
       {needsAdminCountersign && (
         <section className="print-section mb-4 rounded-md border border-slate-300 p-3">
           <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
-            <h2 className="text-sm font-bold text-slate-900">AML / 關係人調查會簽</h2>
-            <div className="font-semibold text-slate-700">會簽單位：管理處</div>
+            <h2 className="text-sm font-bold text-slate-900">AML / 關係人調查紀錄</h2>
+            <div className="font-semibold text-slate-700">處理單位：管理處 / 風控</div>
           </div>
           <div className="space-y-1.5 text-[11px] leading-5">
             <label className="flex items-start gap-2">
@@ -215,35 +213,11 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
             </label>
           </div>
           <div className="mt-3 grid grid-cols-[96px_1fr] overflow-hidden rounded-md border border-slate-300">
-            <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">簽核與日期</div>
+            <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">紀錄與日期</div>
             <div className="min-h-10 px-3 py-2"></div>
           </div>
         </section>
       )}
-
-      <section className="print-section">
-        <h2 className="mb-2 text-sm font-bold text-slate-900">簽核欄位</h2>
-        <table className="w-full border-collapse text-sm table-fixed">
-          <thead>
-            <tr>
-              {signers.map((signer) => (
-                <th key={signer} className="border border-slate-300 bg-slate-900 px-2 py-2 text-[11px] font-semibold text-white">
-                  {signer}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              {signers.map((signer) => (
-                <td key={signer} className="h-16 border border-slate-300 px-2 pb-1.5 text-center align-bottom text-[10px] text-slate-400">
-                  簽核 / 日期
-                </td>
-              ))}
-            </tr>
-          </tbody>
-        </table>
-      </section>
     </div>
   );
 }

@@ -355,7 +355,7 @@ async function createApp() {
     const { key } = req.params;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) {
-      return res.json({ value: "\u6B61\u8FCE\u4F7F\u7528\u4F01\u696D\u5167\u90E8\u7C3D\u6838\u7CFB\u7D71\uFF01\n\n- \u82E5\u6709\u4EFB\u4F55\u7CFB\u7D71\u64CD\u4F5C\u554F\u984C\uFF0C\u8ACB\u806F\u7E6B [IT \u8CC7\u8A0A\u8655](#)\u3002\n- [\u9EDE\u64CA\u6B64\u8655\u67E5\u770B\u7C3D\u6838\u6D41\u7A0B\u898F\u7BC4\u6587\u4EF6](#)" });
+      return res.json({ value: "\u6B61\u8FCE\u4F7F\u7528\u4F01\u696D\u5167\u90E8\u7533\u8ACB\u7BA1\u7406\u7CFB\u7D71\uFF01\n\n- \u82E5\u6709\u4EFB\u4F55\u7CFB\u7D71\u64CD\u4F5C\u554F\u984C\uFF0C\u8ACB\u806F\u7E6B [IT \u8CC7\u8A0A\u8655](#)\u3002\n- [\u9EDE\u64CA\u6B64\u8655\u67E5\u770B\u7533\u8ACB\u6D41\u7A0B\u898F\u7BC4\u6587\u4EF6](#)" });
     }
     try {
       const response = await fetch(`${scriptUrl}?action=getData&sheet=SystemSettings`);
@@ -970,41 +970,16 @@ graph TD
     }
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     const mockTickets = [
-      { id: "DEMO-AP-001", createdAt: (/* @__PURE__ */ new Date()).toISOString(), applicantEmail: email, applicantName: "\u5C55\u793A\u6E2C\u8A66\u54E1", dept: "\u6E2C\u8A66\u90E8\u9580", formType: "AP", subject: "\u884C\u92B7\u5408\u4F5C\u5C08\u6848\u7C3D\u5448", amount: "", status: "Pending", stage: "1", currentApprover: "\u6797\u4E3B\u7BA1 - \u884C\u92B7\u90E8", formData: { apSubject: "\u884C\u92B7\u5408\u4F5C\u5C08\u6848\u7C3D\u5448", apDesc: "\u8AAA\u660E\u5167\u5BB9", external_collab: "true", ext_company_name: "\u5916\u90E8\u6E2C\u8A66\u516C\u53F8" } },
+      { id: "DEMO-AP-001", createdAt: (/* @__PURE__ */ new Date()).toISOString(), applicantEmail: email, applicantName: "\u5C55\u793A\u6E2C\u8A66\u54E1", dept: "\u6E2C\u8A66\u90E8\u9580", formType: "AP", subject: "\u884C\u92B7\u5408\u4F5C\u5C08\u6848\u7C3D\u5448", amount: "", status: "Pending", stage: "", currentApprover: "", formData: { apSubject: "\u884C\u92B7\u5408\u4F5C\u5C08\u6848\u7C3D\u5448", apDesc: "\u8AAA\u660E\u5167\u5BB9", external_collab: "true", ext_company_name: "\u5916\u90E8\u6E2C\u8A66\u516C\u53F8" } },
       { id: "DEMO-CS-002", createdAt: new Date(Date.now() - 864e5).toISOString(), applicantEmail: email, applicantName: "\u5C55\u793A\u6E2C\u8A66\u54E1", dept: "\u6E2C\u8A66\u90E8\u9580", formType: "CS", subject: "\u7D93\u6FDF\u90E8\u8B8A\u66F4\u767B\u8A18\u7528\u5370", amount: "", status: "Approved", stage: "END", currentApprover: "", formData: { seal_type: "\u7D93\u6FDF\u90E8\u7AE0", cs_desc: "\u9700\u8981\u7528\u5370" } }
     ];
     if (!scriptUrl) {
       return res.json({ tickets: [mockTickets[0], mockTickets[1]], source: "mock" });
     }
     try {
-      const [ticketsRes, usersRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=Tickets`),
-        fetch(`${scriptUrl}?action=getData&sheet=Users`)
-      ]);
+      const ticketsRes = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
       const ticketsData = await ticketsRes.json();
-      const usersData = await usersRes.json();
       const rows = ticketsData.data || [];
-      const users = usersData.data || [];
-      const getApproverDisplayName = (approverStr) => {
-        if (!approverStr) return "";
-        if (approverStr.startsWith("ROLE:")) {
-          const roleMap = {
-            "ROLE:ADMIN": "\u7CFB\u7D71\u7BA1\u7406\u54E1",
-            "ROLE:FINANCE": "\u8CA1\u52D9\u90E8\u4E3B\u7BA1",
-            "ROLE:GM": "\u7E3D\u7D93\u7406",
-            "ROLE:LEGAL": "\u6CD5\u52D9\u90E8\u4E3B\u7BA1",
-            "ROLE:CS_HEAD": "\u5BA2\u670D\u90E8\u4E3B\u7BA1"
-          };
-          return roleMap[approverStr] || approverStr;
-        }
-        const userRow = users.find((u) => u[0]?.toLowerCase() === approverStr.toLowerCase());
-        if (userRow && userRow[1]) {
-          const name = String(userRow[1]).split("(")[0].trim();
-          const dept = userRow[2];
-          return `${name} - ${dept}`;
-        }
-        return approverStr;
-      };
       const myTickets = rows.slice(1).filter((r) => {
         return r[2]?.toLowerCase() === email;
       }).map((r) => {
@@ -1022,7 +997,7 @@ graph TD
           subject: r[9],
           amount: r[10],
           formData: r[12] ? JSON.parse(r[12]) : {},
-          currentApprover: isCompleted ? "" : getApproverDisplayName(r[13] || "")
+          currentApprover: ""
         };
       });
       myTickets.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

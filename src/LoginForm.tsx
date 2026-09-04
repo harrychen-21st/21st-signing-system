@@ -51,7 +51,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
             <LogIn className="w-8 h-8 text-blue-600" />
           </div>
         </div>
-        <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">內部簽核系統</h2>
+        <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">內部申請管理系統</h2>
         <p className="text-center text-slate-500 mb-8">請輸入您的企業信箱以登入</p>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -88,7 +88,7 @@ export default function LoginForm({ onLoginSuccess }: LoginFormProps) {
         
         <div className="mt-8 pt-6 border-t border-slate-100">
           <p className="text-xs text-slate-400 text-center">
-            測試帳號: test@company.com (員工), boss@company.com (主管), admin@company.com (管理員)
+            測試帳號: test@company.com (員工), boss@company.com (後台), admin@company.com (管理員)
           </p>
         </div>
       </div>

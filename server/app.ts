@@ -441,7 +441,7 @@ export async function createApp() {
     const { key } = req.params;
     const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
     if (!scriptUrl) {
-      return res.json({ value: "歡迎使用企業內部簽核系統！\n\n- 若有任何系統操作問題，請聯繫 [IT 資訊處](#)。\n- [點擊此處查看簽核流程規範文件](#)" });
+      return res.json({ value: "歡迎使用企業內部申請管理系統！\n\n- 若有任何系統操作問題，請聯繫 [IT 資訊處](#)。\n- [點擊此處查看申請流程規範文件](#)" });
     }
 
     try {
@@ -1153,7 +1153,7 @@ graph TD
 
     // Demo tickets for testing the UI
     const mockTickets = [
-      { id: 'DEMO-AP-001', createdAt: new Date().toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'AP', subject: '行銷合作專案簽呈', amount: '', status: 'Pending', stage: '1', currentApprover: '林主管 - 行銷部', formData: { apSubject: '行銷合作專案簽呈', apDesc: '說明內容', external_collab: 'true', ext_company_name: '外部測試公司' } },
+      { id: 'DEMO-AP-001', createdAt: new Date().toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'AP', subject: '行銷合作專案簽呈', amount: '', status: 'Pending', stage: '', currentApprover: '', formData: { apSubject: '行銷合作專案簽呈', apDesc: '說明內容', external_collab: 'true', ext_company_name: '外部測試公司' } },
       { id: 'DEMO-CS-002', createdAt: new Date(Date.now() - 86400000).toISOString(), applicantEmail: email, applicantName: '展示測試員', dept: '測試部門', formType: 'CS', subject: '經濟部變更登記用印', amount: '', status: 'Approved', stage: 'END', currentApprover: '', formData: { seal_type: '經濟部章', cs_desc: '需要用印' } }
     ];
 
@@ -1162,39 +1162,10 @@ graph TD
     }
 
     try {
-      // 取得所有單據與使用者資料 (以利於轉換 Approver 顯示名稱)
-      const [ticketsRes, usersRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=Tickets`),
-        fetch(`${scriptUrl}?action=getData&sheet=Users`)
-      ]);
+      const ticketsRes = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
       const ticketsData = await ticketsRes.json();
-      const usersData = await usersRes.json();
       
       const rows = ticketsData.data || [];
-      const users = usersData.data || [];
-
-      // 轉換 Approver 字串為友善名稱的 Helper
-      const getApproverDisplayName = (approverStr: string) => {
-        if (!approverStr) return '';
-        if (approverStr.startsWith('ROLE:')) {
-          const roleMap: Record<string, string> = {
-            'ROLE:ADMIN': '系統管理員',
-            'ROLE:FINANCE': '財務部主管',
-            'ROLE:GM': '總經理',
-            'ROLE:LEGAL': '法務部主管',
-            'ROLE:CS_HEAD': '客服部主管'
-          };
-          return roleMap[approverStr] || approverStr;
-        }
-        // 如果是 Email，去 Users 表找他的名字與部門
-        const userRow = users.find((u: any) => u[0]?.toLowerCase() === approverStr.toLowerCase());
-        if (userRow && userRow[1]) {
-          const name = String(userRow[1]).split('(')[0].trim(); // 拿中文名
-          const dept = userRow[2]; // 部門代號或名稱
-          return `${name} - ${dept}`;
-        }
-        return approverStr; // 找不到就 fallback 顯示 Email
-      };
       
       const myTickets = rows.slice(1).filter((r: any) => {
         // C欄 (index 2) 是 ApplicantEmail
@@ -1214,7 +1185,7 @@ graph TD
           subject: r[9],
           amount: r[10],
           formData: r[12] ? JSON.parse(r[12]) : {},
-          currentApprover: isCompleted ? '' : getApproverDisplayName(r[13] || '')
+          currentApprover: ''
         };
       });
 

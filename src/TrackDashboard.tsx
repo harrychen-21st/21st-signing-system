@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, User, ArrowRight, ListFilter, Printer, Edit3, Search } from 'lucide-react';
+import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, ListFilter, Printer, Edit3, Search } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 interface AuditLog {
@@ -32,9 +32,19 @@ const hiddenFormFields = new Set(['ALWAYS', 'expense_category']);
 const isCompletedStatus = (status: string) => ['Completed', 'Approved'].includes(status);
 
 const displayStatus = (status: string) => {
-  if (isCompletedStatus(status)) return '已結案 (核准)';
-  if (status === 'Rejected') return '已被駁回';
-  return status || '簽核中';
+  if (isCompletedStatus(status)) return '已結案';
+  if (status === 'Rejected') return '已退回補件';
+  if (status === 'Checking') return '查核中';
+  if (status === 'Submitted') return '已送出';
+  if (status === 'Pending') return '處理中';
+  return status || '處理中';
+};
+
+const displayAuditAction = (action: string) => {
+  if (action === 'Submitted') return '送出申請';
+  if (action === 'Completed' || action === 'Approved') return '完成結案';
+  if (action === 'Rejected') return '退回補件';
+  return action || '系統紀錄';
 };
 
 const deriveTicketStateFromLogs = (logs: AuditLog[]) => {
@@ -60,8 +70,6 @@ function matchesTicketSearch(ticket: MyTicket, query: string) {
     ticket.subject,
     ticket.amount,
     ticket.status,
-    ticket.stage,
-    ticket.currentApprover,
     ...Object.values(ticket.formData || {}).map((value) => String(value ?? '')),
   ].join(' ').toLowerCase();
 
@@ -88,7 +96,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       rd_pay_method: '付款方式',
       rd_desc: '用途說明',
       rd_file_count: '附件數量',
-      cs_ref_id: '對應核准單號',
+      cs_ref_id: '對應來源單號',
       seal_type: '印章種類',
       cs_desc: '用印內容與說明'
     };
@@ -133,13 +141,13 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       </div>
 
       <div>
-        <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">簽核歷程</h2>
+        <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">處理紀錄</h2>
         {ticket.logs && ticket.logs.length > 0 ? (
           <table className="w-full text-left border-collapse border border-gray-300">
             <thead>
               <tr className="bg-gray-100 text-gray-700">
                 <th className="py-2 px-4 border border-gray-300">時間</th>
-                <th className="py-2 px-4 border border-gray-300">簽核人</th>
+                <th className="py-2 px-4 border border-gray-300">操作人</th>
                 <th className="py-2 px-4 border border-gray-300">動作</th>
                 <th className="py-2 px-4 border border-gray-300">意見</th>
               </tr>
@@ -150,7 +158,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
                   <td className="py-2 px-4 border border-gray-300 text-sm">{new Date(log.timestamp).toLocaleString()}</td>
                   <td className="py-2 px-4 border border-gray-300 text-sm">{log.approver}</td>
                   <td className="py-2 px-4 border border-gray-300 font-bold text-sm">
-                    {log.action === 'Approved' ? '核准' : log.action === 'Rejected' ? '駁回' : log.action}
+                    {displayAuditAction(log.action)}
                   </td>
                   <td className="py-2 px-4 border border-gray-300 text-sm whitespace-pre-wrap">{log.comment || '-'}</td>
                 </tr>
@@ -278,24 +286,31 @@ export default function TrackDashboard({ user }: { user: any }) {
     }
   };
 
-  const getStatusDisplay = (status: string, approver: string) => {
+  const getStatusDisplay = (status: string) => {
     if (isCompletedStatus(status)) {
       return (
         <span className="flex items-center gap-1.5 text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg font-medium text-sm">
-          <CheckCircle className="w-4 h-4" /> 審核通過 (已結案)
+          <CheckCircle className="w-4 h-4" /> 已完成結案
         </span>
       );
     }
     if (status === 'Rejected') {
       return (
         <span className="flex items-center gap-1.5 text-rose-600 bg-rose-50 px-3 py-1.5 rounded-lg font-medium text-sm">
-          <XCircle className="w-4 h-4" /> 已被駁回
+          <XCircle className="w-4 h-4" /> 已退回補件
+        </span>
+      );
+    }
+    if (status === 'Checking') {
+      return (
+        <span className="flex items-center gap-1.5 text-sky-600 bg-sky-50 px-3 py-1.5 rounded-lg font-medium text-sm">
+          <Clock className="w-4 h-4" /> 查核中
         </span>
       );
     }
     return (
       <span className="flex items-center gap-1.5 text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg font-medium text-sm">
-        <Clock className="w-4 h-4" /> 簽核中 (目前關卡: {approver || '系統判定中'})
+        <Clock className="w-4 h-4" /> 處理中
       </span>
     );
   };
@@ -306,10 +321,10 @@ export default function TrackDashboard({ user }: { user: any }) {
       <div className={`glass-panel rounded-2xl md:rounded-3xl p-5 sm:p-8 md:p-12 w-full max-w-5xl animate-slide-up z-10 print:hidden ${printingTicketId ? 'hidden' : ''}`}>
         <div className="text-center mb-8 md:mb-10">
         <h2 className="text-2xl md:text-3xl font-bold text-amber-900 flex items-center justify-center gap-3 mb-2">
-          <Activity className="text-amber-500 w-8 h-8" /> 我的申請單進度追蹤
+          <Activity className="text-amber-500 w-8 h-8" /> 我的申請紀錄
         </h2>
         <p className="text-slate-500 text-sm md:text-base tracking-wide">
-          請輸入您的申請信箱，查看您所有送出單據目前的簽核狀態與歷程
+          查看您送出的單據、處理狀態與系統紀錄
         </p>
       </div>
 
@@ -391,7 +406,7 @@ export default function TrackDashboard({ user }: { user: any }) {
   
                 {/* Status Section */}
                 <div className="w-full md:w-auto md:min-w-[200px] flex items-center justify-between md:justify-end border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6">
-                  {getStatusDisplay(ticket.status, ticket.currentApprover)}
+                  {getStatusDisplay(ticket.status)}
                   <button className="md:hidden p-2 text-slate-400 bg-slate-50 rounded-lg ml-2"><ListFilter className="w-4 h-4"/></button>
                 </div>
               </div>
@@ -401,7 +416,7 @@ export default function TrackDashboard({ user }: { user: any }) {
                 <div className="border-t border-slate-100 bg-slate-50 p-6 animate-slide-up">
                   <h5 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
                     <ListFilter className="w-4 h-4 text-slate-400"/>
-                    簽核歷程 (Audit Logs)
+                    處理紀錄 (Audit Logs)
                   </h5>
                   {loadingLogs[ticket.id] ? (
                     <div className="flex items-center gap-2 text-sm text-slate-500 py-4"><Loader2 className="w-4 h-4 animate-spin"/> 載入中...</div>
@@ -415,7 +430,7 @@ export default function TrackDashboard({ user }: { user: any }) {
                            </div>
                            <div className="bg-white p-3 rounded-xl border border-slate-200 text-sm flex-grow shadow-sm">
                              <div className="flex justify-between items-center mb-1">
-                               <span className="font-bold text-slate-800">{log.action || 'Unknown'} <span className="text-slate-400 font-normal ml-2">關卡: {log.stage}</span></span>
+                               <span className="font-bold text-slate-800">{displayAuditAction(log.action)}</span>
                                <span className="text-xs text-slate-400">{new Date(log.timestamp).toLocaleString()}</span>
                              </div>
                              <div className="text-slate-600 mb-1">
@@ -431,7 +446,7 @@ export default function TrackDashboard({ user }: { user: any }) {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-slate-500 text-sm py-2 italic text-center w-full">尚無任何簽核紀錄</p>
+                    <p className="text-slate-500 text-sm py-2 italic text-center w-full">尚無任何處理紀錄</p>
                   )}
                   {isCompletedStatus(ticket.status) && (
                      <div className="mt-6 text-center">
