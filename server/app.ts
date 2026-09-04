@@ -144,10 +144,14 @@ const getTicketBundleRows = async (scriptUrl: string, ttlMs = 20_000) => {
       const ticketRows = data.tickets || [];
       const relationRows = data.relations || [ticketRelationHeaders];
       const attachmentRows = data.attachmentChecks || [attachmentCheckHeaders];
+      const expiresAt = Date.now() + ttlMs;
       sheetCache.set(cacheKey, {
-        expiresAt: Date.now() + ttlMs,
+        expiresAt,
         rows: [ticketRows, relationRows, attachmentRows] as unknown as SheetRows
       });
+      sheetCache.set(`${scriptUrl}|Tickets`, { expiresAt, rows: ticketRows });
+      sheetCache.set(`${scriptUrl}|TicketRelations`, { expiresAt, rows: relationRows });
+      sheetCache.set(`${scriptUrl}|AttachmentChecks`, { expiresAt, rows: attachmentRows });
       return { ticketRows, relationRows, attachmentRows, source: 'bundle' };
     }
   } catch (error: any) {
@@ -159,6 +163,10 @@ const getTicketBundleRows = async (scriptUrl: string, ttlMs = 20_000) => {
     getOptionalSheetRows(scriptUrl, 'TicketRelations', ticketRelationHeaders),
     getOptionalSheetRows(scriptUrl, 'AttachmentChecks', attachmentCheckHeaders)
   ]);
+  sheetCache.set(cacheKey, {
+    expiresAt: Date.now() + ttlMs,
+    rows: [ticketRows, relationRows, attachmentRows] as unknown as SheetRows
+  });
   return { ticketRows, relationRows, attachmentRows, source: 'separate' };
 };
 
