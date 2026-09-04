@@ -36,6 +36,69 @@ const parseJsonCell = (value) => {
     return {};
   }
 };
+const buildHeaderIndex = (headers) => headers.reduce((index, header, columnIndex) => {
+  index[String(header || "").trim()] = columnIndex;
+  return index;
+}, {});
+const readCell = (row, index, header, fallbackIndex) => {
+  const columnIndex = index[header];
+  return row[columnIndex ?? fallbackIndex] ?? "";
+};
+const parseTaipeiDateMs = (value) => {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  const text = String(value).trim();
+  const taipeiMatch = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (taipeiMatch) {
+    const [, year, month, day, hour, minute, second = "0"] = taipeiMatch;
+    return (/* @__PURE__ */ new Date(
+      `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute}:${second.padStart(2, "0")}+08:00`
+    )).getTime();
+  }
+  const parsed = new Date(text).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+const fetchJson = async (url, options = {}) => {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Apps Script returned invalid JSON: ${text.substring(0, 160)}`);
+  }
+  if (!response.ok) {
+    throw new Error(data?.error || `Apps Script returned status: ${response.status}`);
+  }
+  return data;
+};
+const getSheetRows = async (scriptUrl, sheet, ttlMs = 2e4) => {
+  const cacheKey = `${scriptUrl}|${sheet}`;
+  const cached = sheetCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+  const data = await fetchJson(`${scriptUrl}?action=getData&sheet=${encodeURIComponent(sheet)}`);
+  if (data.success === false) {
+    if (String(data.error || "").includes("Sheet not found")) return [];
+    throw new Error(data.error || `Failed to fetch sheet: ${sheet}`);
+  }
+  const rows = Array.isArray(data.data) ? data.data : [];
+  sheetCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, rows });
+  return rows;
+};
+const getOptionalSheetRows = async (scriptUrl, sheet, headers = []) => {
+  try {
+    const rows = await getSheetRows(scriptUrl, sheet);
+    return rows.length ? rows : headers.length ? [headers] : [];
+  } catch (error) {
+    if (String(error?.message || "").includes("Sheet not found")) {
+      return headers.length ? [headers] : [];
+    }
+    throw error;
+  }
+};
+const invalidateSheetCache = (scriptUrl, sheets) => {
+  sheets.forEach((sheet) => sheetCache.delete(`${scriptUrl}|${sheet}`));
+};
 const extractDeptCode = (department = "") => {
   const match = String(department).trim().match(/^[A-Za-z0-9]+/);
   return (match?.[0] || "XX").toUpperCase();
@@ -66,8 +129,51 @@ const defaultFormTypes = [
   { id: "RD", name: "\u8ACB\u6B3E\u55AE (RD)" },
   { id: "CS", name: "\u7528\u5370\u7533\u8ACB\u55AE (CS)" }
 ];
+const ticketHeaders = [
+  "TicketID",
+  "CreatedAt",
+  "ApplicantEmail",
+  "ApplicantName",
+  "Department",
+  "FormType",
+  "Status",
+  "CurrentStage",
+  "SLA_Deadline",
+  "Subject",
+  "Amount",
+  "NeedsAML",
+  "FormData_JSON",
+  "CurrentApprover",
+  "AML_Result",
+  "AML_Comment",
+  "RP_Result",
+  "RP_Comment",
+  "AML_LastSyncedAt"
+];
+const ticketRelationHeaders = [
+  "RelationID",
+  "SourceTicketID",
+  "TargetTicketID",
+  "RelationType",
+  "Note",
+  "CreatedBy",
+  "CreatedAt",
+  "SourceField",
+  "Status"
+];
+const attachmentCheckHeaders = [
+  "AttachmentID",
+  "TicketID",
+  "FieldKey",
+  "Url",
+  "VersionNote",
+  "CheckStatus",
+  "Warning",
+  "CheckedAt"
+];
 const meetingRoomHeaders = ["RoomID", "RoomName", "Location", "Capacity", "IsActive", "SortOrder", "OpenTime", "CloseTime", "CreatedAt"];
 const meetingBookingHeaders = ["BookingID", "RoomID", "RoomName", "BookerEmail", "BookerName", "Department", "Date", "StartTime", "EndTime", "Purpose", "Status", "CreatedAt", "UpdatedAt", "CancelledAt", "CancelledBy", "ReminderSentAt"];
+const sheetCache = /* @__PURE__ */ new Map();
 const isAdminUser = (user) => user?.roles?.includes("ROLE:ADMIN");
 const canAccessBackoffice = (user) => {
   const roles = user?.roles || [];
@@ -83,12 +189,12 @@ const canAccessBackoffice = (user) => {
 };
 const isSameUserOrAdmin = (requestedEmail, user) => isAdminUser(user) || String(user?.email || "").toLowerCase() === String(requestedEmail || "").toLowerCase();
 const allowedGeneratedFieldTypes = /* @__PURE__ */ new Set(["text", "number", "date", "select", "textarea"]);
-const allowedGeneratedApproverTypes = /* @__PURE__ */ new Set(["MANAGER", "ROLE", "SPECIAL:AML_CHECK", "DEPT"]);
+const allowedGeneratedRuleOps = /* @__PURE__ */ new Set(["ALWAYS", "==", "!=", ">", ">=", "<", "<=", "IN", "CONTAINS"]);
 const normalizeGeneratedFormId = (value) => String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-const normalizeGeneratedApproverType = (value) => {
-  const normalized = String(value || "ROLE").trim().toUpperCase();
-  if (normalized === "HIERARCHY") return "MANAGER";
-  return allowedGeneratedApproverTypes.has(normalized) ? normalized : "ROLE";
+const normalizeGeneratedHandlingRole = (value) => {
+  const normalized = String(value || "ROLE:ADMIN").trim();
+  if (!normalized) return "ROLE:ADMIN";
+  return normalized.toUpperCase().startsWith("ROLE:") ? normalized.toUpperCase() : normalized;
 };
 const normalizeGeneratedFields = (fields = []) => {
   return fields.map((field) => {
@@ -110,18 +216,247 @@ const normalizeGeneratedFields = (fields = []) => {
 const normalizeGeneratedRules = (rules = []) => {
   return rules.map((rule, index) => ({
     id: String(rule?.id || `rule-${Date.now()}-${index}`),
-    stage: Number(rule?.stage || index + 1),
-    conditionField: String(rule?.conditionField || "ALWAYS"),
-    conditionOp: String(rule?.conditionOp || "=="),
-    conditionVal: String(rule?.conditionVal || "TRUE"),
-    approverType: normalizeGeneratedApproverType(rule?.approverType),
-    approverValue: String(rule?.approverValue || "ROLE:ADMIN")
+    ruleName: String(rule?.ruleName || rule?.name || `\u5F8C\u53F0\u8655\u7406\u898F\u5247 ${index + 1}`),
+    triggerField: String(rule?.triggerField || rule?.conditionField || "ALWAYS"),
+    triggerOp: allowedGeneratedRuleOps.has(String(rule?.triggerOp || rule?.conditionOp || "ALWAYS").toUpperCase()) ? String(rule?.triggerOp || rule?.conditionOp || "ALWAYS").toUpperCase() : "ALWAYS",
+    triggerValue: String(rule?.triggerValue || rule?.conditionVal || ""),
+    handlingRole: normalizeGeneratedHandlingRole(rule?.handlingRole || rule?.approverValue || "ROLE:ADMIN"),
+    handlingNote: String(rule?.handlingNote || rule?.note || ""),
+    isActive: rule?.isActive === false ? "FALSE" : "TRUE"
   }));
 };
 const rowToObject = (headers, row) => headers.reduce((record, header, index) => {
   record[header] = row[index] ?? "";
   return record;
 }, {});
+const mapTicketRow = (headers, row) => {
+  const index = buildHeaderIndex(headers.length ? headers : ticketHeaders);
+  const status = String(readCell(row, index, "Status", 6) || "");
+  const isCompleted = status === "Completed" || status === "Approved";
+  return {
+    id: String(readCell(row, index, "TicketID", 0) || ""),
+    createdAt: String(readCell(row, index, "CreatedAt", 1) || ""),
+    applicantEmail: String(readCell(row, index, "ApplicantEmail", 2) || ""),
+    applicantName: String(readCell(row, index, "ApplicantName", 3) || ""),
+    dept: String(readCell(row, index, "Department", 4) || ""),
+    formType: String(readCell(row, index, "FormType", 5) || ""),
+    status,
+    stage: isCompleted ? "END" : String(readCell(row, index, "CurrentStage", 7) || ""),
+    subject: String(readCell(row, index, "Subject", 9) || ""),
+    amount: String(readCell(row, index, "Amount", 10) || ""),
+    formData: parseJsonCell(readCell(row, index, "FormData_JSON", 12)),
+    currentApprover: isCompleted ? "" : String(readCell(row, index, "CurrentApprover", 13) || ""),
+    amlResult: String(readCell(row, index, "AML_Result", 14) || ""),
+    amlComment: String(readCell(row, index, "AML_Comment", 15) || ""),
+    rpResult: String(readCell(row, index, "RP_Result", 16) || ""),
+    rpComment: String(readCell(row, index, "RP_Comment", 17) || ""),
+    amlLastSyncedAt: String(readCell(row, index, "AML_LastSyncedAt", 18) || "")
+  };
+};
+const toTicketBasic = (ticket) => ({
+  id: ticket.id,
+  createdAt: ticket.createdAt,
+  applicantName: ticket.applicantName,
+  dept: ticket.dept,
+  formType: ticket.formType,
+  status: ticket.status,
+  subject: ticket.subject
+});
+const mapRelationRow = (headers, row) => {
+  const index = buildHeaderIndex(headers.length ? headers : ticketRelationHeaders);
+  return {
+    id: String(readCell(row, index, "RelationID", 0) || ""),
+    sourceTicketId: String(readCell(row, index, "SourceTicketID", 1) || ""),
+    targetTicketId: String(readCell(row, index, "TargetTicketID", 2) || ""),
+    relationType: String(readCell(row, index, "RelationType", 3) || ""),
+    note: String(readCell(row, index, "Note", 4) || ""),
+    createdBy: String(readCell(row, index, "CreatedBy", 5) || ""),
+    createdAt: String(readCell(row, index, "CreatedAt", 6) || ""),
+    sourceField: String(readCell(row, index, "SourceField", 7) || ""),
+    status: String(readCell(row, index, "Status", 8) || "Active")
+  };
+};
+const mapAttachmentRow = (headers, row) => {
+  const index = buildHeaderIndex(headers.length ? headers : attachmentCheckHeaders);
+  return {
+    id: String(readCell(row, index, "AttachmentID", 0) || ""),
+    ticketId: String(readCell(row, index, "TicketID", 1) || ""),
+    fieldKey: String(readCell(row, index, "FieldKey", 2) || ""),
+    url: String(readCell(row, index, "Url", 3) || ""),
+    versionNote: String(readCell(row, index, "VersionNote", 4) || ""),
+    checkStatus: String(readCell(row, index, "CheckStatus", 5) || ""),
+    warning: String(readCell(row, index, "Warning", 6) || ""),
+    checkedAt: String(readCell(row, index, "CheckedAt", 7) || "")
+  };
+};
+const parseTicketRows = (rows) => {
+  const headers = rows[0] || ticketHeaders;
+  return rows.slice(1).map((row) => mapTicketRow(headers, row)).filter((ticket) => ticket.id);
+};
+const parseRelationRows = (rows) => {
+  const headers = rows[0] || ticketRelationHeaders;
+  return rows.slice(1).map((row) => mapRelationRow(headers, row)).filter((relation) => relation.id && relation.sourceTicketId && relation.targetTicketId && relation.status !== "Deleted");
+};
+const parseAttachmentRows = (rows) => {
+  const headers = rows[0] || attachmentCheckHeaders;
+  return rows.slice(1).map((row) => mapAttachmentRow(headers, row)).filter((item) => item.id && item.ticketId);
+};
+const buildTicketContext = (tickets, relations, attachments) => {
+  const ticketById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+  const relationMap = /* @__PURE__ */ new Map();
+  const attachmentMap = /* @__PURE__ */ new Map();
+  relations.forEach((relation) => {
+    const sourceSummary = {
+      ...relation,
+      direction: "source",
+      linkedTicket: ticketById.has(relation.targetTicketId) ? toTicketBasic(ticketById.get(relation.targetTicketId)) : null
+    };
+    const targetSummary = {
+      ...relation,
+      direction: "target",
+      linkedTicket: ticketById.has(relation.sourceTicketId) ? toTicketBasic(ticketById.get(relation.sourceTicketId)) : null
+    };
+    relationMap.set(relation.sourceTicketId, [...relationMap.get(relation.sourceTicketId) || [], sourceSummary]);
+    relationMap.set(relation.targetTicketId, [...relationMap.get(relation.targetTicketId) || [], targetSummary]);
+  });
+  attachments.filter((item) => item.checkStatus === "Warning" || item.warning).forEach((item) => {
+    attachmentMap.set(item.ticketId, [...attachmentMap.get(item.ticketId) || [], item]);
+  });
+  return { ticketById, relationMap, attachmentMap };
+};
+const enrichTickets = (tickets, relationMap, attachmentMap) => tickets.map((ticket) => ({
+  ...ticket,
+  relations: relationMap.get(ticket.id) || [],
+  attachmentWarnings: attachmentMap.get(ticket.id) || []
+}));
+const isLikelyAttachmentField = (key, value) => {
+  const field = key.toLowerCase();
+  const text = String(value || "").trim();
+  return Boolean(text) && (field.includes("attachment") || field.includes("file") || field.includes("document") || /^https?:\/\//i.test(text));
+};
+const timeoutSignal = (timeoutMs) => {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+};
+const checkAttachmentUrl = async (url) => {
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return {
+      checkStatus: "Warning",
+      warning: "\u9644\u4EF6\u6B04\u4F4D\u4E0D\u662F http/https \u7DB2\u5740\uFF0C\u8ACB\u78BA\u8A8D\u5171\u7528\u8DEF\u5F91\u53EF\u4F9B\u67E5\u6838\u3002"
+    };
+  }
+  try {
+    let response = await fetch(trimmed, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: timeoutSignal(4e3)
+    });
+    if (response.status === 405 || response.status === 403) {
+      response = await fetch(trimmed, {
+        method: "GET",
+        redirect: "follow",
+        signal: timeoutSignal(4e3)
+      });
+    }
+    if (response.status >= 400) {
+      return {
+        checkStatus: "Warning",
+        warning: `\u9644\u4EF6\u9023\u7D50\u6AA2\u67E5\u56DE\u61C9 ${response.status}\uFF0C\u8ACB\u78BA\u8A8D\u6B0A\u9650\u6216\u7DB2\u5740\u3002`
+      };
+    }
+    return { checkStatus: "OK", warning: "" };
+  } catch (error) {
+    return {
+      checkStatus: "Warning",
+      warning: `\u9644\u4EF6\u9023\u7D50\u7121\u6CD5\u5B8C\u6210\u6AA2\u67E5\uFF0C\u8ACB\u78BA\u8A8D\u6B0A\u9650\u6216\u7DB2\u5740\u3002${error?.name === "AbortError" ? "\uFF08\u903E\u6642\uFF09" : ""}`
+    };
+  }
+};
+const buildAttachmentChecks = async (formData) => {
+  const entries = Object.entries(formData || {}).filter(([key, value]) => isLikelyAttachmentField(key, value));
+  const versionNote = String(formData.attachment_version_note || formData.version_note || "").trim();
+  return Promise.all(entries.map(async ([fieldKey, rawValue], index) => {
+    const url = String(rawValue || "").trim();
+    const check = await checkAttachmentUrl(url);
+    return {
+      attachmentId: `ATT-${Date.now()}-${index + 1}`,
+      fieldKey,
+      url,
+      versionNote,
+      checkStatus: check.checkStatus,
+      warning: check.warning,
+      checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }));
+};
+const normalizeRpDisplay = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.includes("\u5DF2\u904E\u95DC\u4FC2\u4EBA\u6703\u8B70")) return "\u5DF2\u904E\u95DC\u4FC2\u4EBA";
+  return text;
+};
+const escapeXml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const worksheetXml = (name, headers, rows) => {
+  const headerXml = headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(header)}</Data></Cell>`).join("");
+  const rowsXml = rows.map((row) => `<Row>${headers.map((_, index) => `<Cell><Data ss:Type="String">${escapeXml(row[index])}</Data></Cell>`).join("")}</Row>`).join("");
+  return `<Worksheet ss:Name="${escapeXml(name)}"><Table><Row>${headerXml}</Row>${rowsXml}</Table></Worksheet>`;
+};
+const buildExcelWorkbook = (sheets) => {
+  const worksheets = sheets.map((sheet) => worksheetXml(sheet.name, sheet.headers, sheet.rows)).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:x="urn:schemas-microsoft-com:office:excel"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+${worksheets}
+</Workbook>`;
+};
+const matchesAuditFilters = (ticket, query, relations = []) => {
+  const search = String(query.search || "").trim().toLowerCase();
+  const dept = String(query.dept || "").trim().toLowerCase();
+  const formType = String(query.formType || "").trim().toLowerCase();
+  const status = String(query.status || "").trim().toLowerCase();
+  const taxId = String(query.taxId || "").trim().toLowerCase();
+  const relationId = String(query.relationId || "").trim().toLowerCase();
+  const dateFrom = String(query.dateFrom || "").trim();
+  const dateTo = String(query.dateTo || "").trim();
+  const createdAtMs = parseTaipeiDateMs(ticket.createdAt);
+  if (dept && !ticket.dept.toLowerCase().includes(dept)) return false;
+  if (formType && ticket.formType.toLowerCase() !== formType) return false;
+  if (status && ticket.status.toLowerCase() !== status) return false;
+  if (taxId && !String(ticket.formData?.ext_tax_id || "").toLowerCase().includes(taxId)) return false;
+  if (dateFrom && createdAtMs < (/* @__PURE__ */ new Date(`${dateFrom}T00:00:00+08:00`)).getTime()) return false;
+  if (dateTo && createdAtMs > (/* @__PURE__ */ new Date(`${dateTo}T23:59:59+08:00`)).getTime()) return false;
+  if (relationId) {
+    const relationText = relations.map((relation) => [
+      relation.id,
+      relation.sourceTicketId,
+      relation.targetTicketId,
+      relation.linkedTicket?.id || ""
+    ].join(" ")).join(" ").toLowerCase();
+    if (!relationText.includes(relationId)) return false;
+  }
+  if (!search) return true;
+  const searchableText = [
+    ticket.id,
+    ticket.createdAt,
+    ticket.applicantEmail,
+    ticket.applicantName,
+    ticket.dept,
+    ticket.formType,
+    ticket.status,
+    ticket.subject,
+    ticket.amount,
+    ticket.amlResult,
+    ticket.rpResult,
+    ...Object.values(ticket.formData || {}).map((value) => String(value ?? "")),
+    ...relations.map((relation) => `${relation.id} ${relation.sourceTicketId} ${relation.targetTicketId} ${relation.linkedTicket?.subject || ""}`)
+  ].join(" ").toLowerCase();
+  return searchableText.includes(search);
+};
 const normalizeDateCell = (value) => {
   if (!value) return "";
   const text = String(value);
@@ -423,7 +758,7 @@ async function createApp() {
 
 \u8ACB\u56B4\u683C\u56DE\u50B3 JSON\uFF0C\u5167\u5BB9\u5FC5\u9808\u5305\u542B\uFF1A
 1. fields: \u6B04\u4F4D\u9663\u5217\uFF0C\u6BCF\u500B\u6B04\u4F4D\u5305\u542B id\u3001label\u3001type\u3001options\u3001required\u3002
-2. rules: \u5F8C\u53F0\u8655\u7406\u63D0\u793A\u898F\u5247\u9663\u5217\uFF0C\u6BCF\u7B46\u5305\u542B stage\u3001conditionField\u3001conditionOp\u3001conditionVal\u3001approverType\u3001approverValue\u3002\u82E5\u6C92\u6709\u7279\u6B8A\u5F8C\u53F0\u89D2\u8272\uFF0C\u8ACB\u7D66\u4E00\u7B46 ROLE:ADMIN\u3002
+2. rules: \u5F8C\u53F0\u8655\u7406\u63D0\u793A\u898F\u5247\u9663\u5217\uFF0C\u6BCF\u7B46\u5305\u542B ruleName\u3001triggerField\u3001triggerOp\u3001triggerValue\u3001handlingRole\u3001handlingNote\u3001isActive\u3002\u82E5\u6C92\u6709\u7279\u6B8A\u5F8C\u53F0\u89D2\u8272\uFF0C\u8ACB\u7D66\u4E00\u7B46 handlingRole \u70BA ROLE:ADMIN \u7684\u63D0\u9192\u898F\u5247\u3002
 3. fieldsMarkdown: \u7D66\u7BA1\u7406\u54E1\u770B\u7684 Markdown \u6B04\u4F4D\u6E05\u55AE\u8AAA\u660E\u3002
 4. logicMarkdown: \u7D66\u7BA1\u7406\u54E1\u770B\u7684 Markdown \u5F8C\u53F0\u8655\u7406\u6D41\u7A0B\u8AAA\u660E\u3002`;
       const response = await ai.models.generateContent({
@@ -452,12 +787,13 @@ async function createApp() {
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    stage: { type: Type.NUMBER },
-                    conditionField: { type: Type.STRING },
-                    conditionOp: { type: Type.STRING },
-                    conditionVal: { type: Type.STRING },
-                    approverType: { type: Type.STRING },
-                    approverValue: { type: Type.STRING }
+                    ruleName: { type: Type.STRING },
+                    triggerField: { type: Type.STRING },
+                    triggerOp: { type: Type.STRING },
+                    triggerValue: { type: Type.STRING },
+                    handlingRole: { type: Type.STRING },
+                    handlingNote: { type: Type.STRING },
+                    isActive: { type: Type.BOOLEAN }
                   }
                 }
               },
@@ -523,47 +859,49 @@ async function createApp() {
         formId: "AP",
         fieldsMarkdown: `# \u7C3D\u5448\u55AE (AP) \u6B04\u4F4D\u8A2D\u8A08
 
-\u672C\u8868\u55AE\u7528\u65BC\u4E00\u822C\u4E8B\u52D9\u4E4B\u7C3D\u6838\u8207\u6838\u5B9A\uFF0C\u652F\u63F4\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u6642\u4E4B\u52D5\u614B\u6B04\u4F4D\u64F4\u5145\u8207 AML/\u516C\u53F8\u8CC7\u8A0A\u81EA\u52D5\u5E36\u5165\u3002
+\u672C\u8868\u55AE\u7528\u65BC\u4E00\u822C\u5167\u90E8\u7533\u8ACB\u8207\u7C3D\u5448\u7D00\u9304\uFF0C\u652F\u63F4\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u6642\u4E4B\u52D5\u614B\u6B04\u4F4D\u64F4\u5145\u3001\u516C\u53F8\u8CC7\u8A0A\u5E36\u5165\u8207 AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5\u52FE\u7A3D\u3002
 
 | \u6B04\u4F4D ID | \u6B04\u4F4D\u540D\u7A31 | \u6B04\u4F4D\u578B\u614B | \u5FC5\u586B | \u8AAA\u660E/\u52D5\u614B\u986F\u793A\u689D\u4EF6 |
 | :--- | :--- | :--- | :--- | :--- |
+| **related_ticket** | \u76F8\u95DC\u55AE\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u672C\u7533\u8ACB\u5EF6\u7E8C\u6216\u88DC\u5145\u65E2\u6709\u55AE\u865F\uFF0C\u8ACB\u586B\u5165\u4F86\u6E90\u55AE\u865F\u4EE5\u5229\u52FE\u7A3D |
 | **subject** | \u4E3B\u65E8 | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u7C21\u8FF0\u7C3D\u5448\u4E4B\u4E3B\u65E8\u8207\u4E3B\u8981\u76EE\u7684 |
 | **description** | \u5167\u5BB9\u8AAA\u660E | \u591A\u884C\u6587\u5B57 | \u662F | \u8A73\u7D30\u8AAA\u660E\u672C\u7C3D\u5448\u4E4B\u539F\u56E0\u3001\u5167\u5BB9\u8207\u80CC\u666F |
 | **attachment** | \u9644\u4EF6\u4E0A\u50B3 | \u55AE\u884C\u6587\u5B57 | \u5426 | \u8ACB\u8CBC\u4E0A\u76F8\u95DC\u96F2\u7AEF\u9023\u7D50\u6216\u8CC7\u6599\u593E\u8DEF\u5F91 |
+| **attachment_version_note** | \u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u9644\u4EF6\u6709\u591A\u7248\uFF0C\u8ACB\u88DC\u5145\u7248\u672C\u6216\u5DEE\u7570\u8AAA\u660E |
 | **external_collab** | \u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u662F\u300D\u6216\u300C\u5426\u300D |
 | **ext_tax_id** | \u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u8F38\u5165\u5F8C\u81EA\u52D5\u5E36\u5165\u5EE0\u5546\u8207\u8CA0\u8CAC\u4EBA\u8CC7\u6599 |
 | **ext_company_name** | \u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31 | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |
 | **ext_company_owner** | \u8CA0\u8CAC\u4EBA\u59D3\u540D | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |`,
-        logicMarkdown: `# \u7C3D\u5448\u55AE (AP) \u7C3D\u6838\u908F\u8F2F\u77E9\u9663
+        logicMarkdown: `# \u7C3D\u5448\u55AE (AP) \u5F8C\u53F0\u8655\u7406\u898F\u5247
 
-\u6839\u64DA\u7C3D\u4EF6\u5C6C\u6027\uFF0C\u7CFB\u7D71\u5C07\u81EA\u52D5\u5206\u6D3E\u81F3\u5C0D\u61C9\u7684\u7C3D\u6838\u5C64\u7D1A\u3002\u672C\u8868\u55AE\u652F\u63F4\u52D5\u614B AML \u8ABF\u67E5\u95DC\u5361\u3002
+\u7CFB\u7D71\u8CA0\u8CAC\u7522\u751F\u55AE\u865F\u3001\u4FDD\u5B58\u7533\u8ACB\u7D00\u9304\u3001\u5EFA\u7ACB\u95DC\u806F\u7DDA\u7D22\uFF0C\u4E26\u5728\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u6642\u5EFA\u7ACB AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5\u8CC7\u6599\u3002
 
 \`\`\`mermaid
 graph TD
-    Start([1. \u7533\u8ACB\u4EBA\u9001\u51FA]) --> Stage1[2. \u76F4\u5C6C\u4E3B\u7BA1\u7C3D\u6838]
-    Stage1 --> Stage2[3. \u672C\u90E8\u90E8\u9577\u7C3D\u6838]
-    Stage2 --> Cond{\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546?}
-    Cond -- \u662F (\u4E14\u9700\u9032\u884C AML \u8ABF\u67E5) --> Stage3[4. AML\u8ABF\u67E5\u8207\u6CD5\u9075\u5BE9\u67E5]
-    Cond -- \u5426 --> Stage4[5. \u884C\u653F\u526F\u7E3D\u6838\u6C7A]
-    Stage3 --> Stage4
-    Stage4 --> Stage5[6. \u7E3D\u7D93\u7406\u7D42\u5BE9]
-    Stage5 --> End([\u7C3D\u6838\u5B8C\u6210\u4E26\u6B78\u6A94])
+    Start([\u7533\u8ACB\u4EBA\u9001\u51FA]) --> Ticket[\u7CFB\u7D71\u7522\u751F AP \u55AE\u865F]
+    Ticket --> Audit[\u5BEB\u5165 Tickets \u8207 AuditLogs]
+    Audit --> Cond{\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546?}
+    Cond -- \u662F --> AML[\u5EFA\u7ACB AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5\u8CC7\u6599]
+    Cond -- \u5426 --> Backoffice[\u5F8C\u53F0\u8655\u7406\u8207\u8FFD\u8E64]
+    AML --> Backoffice
+    Backoffice --> Done[\u5B8C\u6210\u7D50\u6848\u4E26\u4FDD\u7559\u7A3D\u6838\u8ECC\u8DE1]
 \`\`\`
 
-### \u7C3D\u6838\u95DC\u5361\u660E\u7D30
+### \u5F8C\u53F0\u8655\u7406\u91CD\u9EDE
 
-| \u95DC\u5361 | \u7C3D\u6838\u89D2\u8272 | \u89F8\u767C\u689D\u4EF6 | \u8AAA\u660E |
-| :--- | :--- | :--- | :--- |
-| **\u7B2C 1 \u95DC** | \u76F4\u5C6C\u4E3B\u7BA1 (MANAGER) | \u7121\u689D\u4EF6 | \u7533\u8ACB\u4EBA\u4E4B\u76F4\u63A5\u532F\u5831\u4E3B\u7BA1\u7B2C\u4E00\u968E\u6BB5\u5BE9\u67E5 |
-| **\u7B2C 2 \u95DC** | \u90E8\u9580\u7D93\u7406/\u90E8\u9577 (DEPT_HEAD) | \u7121\u689D\u4EF6 | \u90E8\u9580\u4E00\u7D1A\u4E3B\u7BA1\u4E4B\u8907\u5BE9\u8207\u6838\u53EF |
-| **\u7B2C 3 \u95DC** | AML \u8ABF\u67E5\u8207\u6CD5\u9075\u5BE9\u67E5 (SPECIAL:AML_CHECK / ADMIN_DIRECTOR) | **external_collab == '\u662F'** | \u5916\u90E8\u5EE0\u5546\u7D71\u4E00\u7DE8\u865F\u81EA\u52D5\u89F8\u767C AML/\u9ED1\u540D\u55AE\u6BD4\u5C0D\u8207\u6CD5\u9075\u4E3B\u7BA1\u7C3D\u6838 |
-| **\u7B2C 4 \u95DC** | \u884C\u653F\u526F\u7E3D (ADMIN_VP) | \u7121\u689D\u4EF6 | \u7BA1\u7406\u672C\u90E8\u6700\u9AD8\u4E3B\u7BA1\u5BE9\u67E5 |
-| **\u7B2C 5 \u95DC** | \u7E3D\u7D93\u7406 (GM) | \u7121\u689D\u4EF6 | \u7D42\u5BE9\u8207\u6700\u9AD8\u6838\u6C7A |`,
+| \u9805\u76EE | \u89F8\u767C\u689D\u4EF6 | \u8655\u7406\u91CD\u9EDE |
+| :--- | :--- | :--- |
+| \u55AE\u865F\u7D00\u9304 | \u9001\u51FA\u8868\u55AE | \u7522\u751F AP \u55AE\u865F\u4E26\u4FDD\u5B58\u7533\u8ACB\u5167\u5BB9 |
+| AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5 | external_collab == '\u662F' | \u540C\u6B65 AML \u8ABF\u67E5\u8CC7\u6599\u4E26\u56DE\u5BEB\u67E5\u6838\u7D50\u679C |
+| \u55AE\u865F\u52FE\u7A3D | \u7533\u8ACB\u5167\u5BB9\u5E36\u6709\u76F8\u95DC\u55AE\u865F | \u5EFA\u7ACB TicketRelations\uFF0C\u4F9B\u5F8C\u7E8C\u67E5\u8A62\u8207\u7A3D\u6838\u5305\u532F\u51FA |
+| \u9644\u4EF6\u6AA2\u67E5 | \u9644\u4EF6\u6B04\u4F4D\u6709\u503C | \u8A18\u9304\u9644\u4EF6\u7248\u672C\u8AAA\u660E\u8207\u9023\u7D50\u6AA2\u67E5\u8B66\u793A |`,
         configJSON: {
           fields: [
+            { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u9078\u586B)", type: "text", required: false },
             { id: "subject", label: "\u4E3B\u65E8", type: "text", required: true },
             { id: "description", label: "\u5167\u5BB9\u8AAA\u660E", type: "textarea", required: true },
             { id: "attachment", label: "\u9644\u4EF6\u4E0A\u50B3 (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF\u9023\u7D50)", type: "text", required: false },
+            { id: "attachment_version_note", label: "\u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E", type: "text", required: false },
             { id: "external_collab", label: "\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546", type: "select", options: ["\u5426", "\u662F"], required: true },
             { id: "ext_tax_id", label: "\u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
             { id: "ext_company_name", label: "\u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
@@ -589,30 +927,32 @@ graph TD
 | **payment_date** | \u4ED8\u6B3E\u671F\u9650 | \u65E5\u671F | \u662F | \u9810\u8A08\u4ED8\u6B3E\u4E4B\u65E5\u671F |
 | **payment_method** | \u4ED8\u6B3E\u65B9\u5F0F | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u532F\u6B3E\u300D\u3001\u300C\u73FE\u91D1\u300D\u6216\u300C\u5DF2\u7531\u7533\u8ACB\u4EBA\u4EE3\u588A\u300D |
 | **description** | \u8ACB\u6B3E\u7528\u9014\u8AAA\u660E | \u591A\u884C\u6587\u5B57 | \u662F | \u8A73\u7D30\u8AAA\u660E\u672C\u6B21\u8ACB\u6B3E\u4E4B\u7528\u9014\u8207\u660E\u7D30 |
-| **attachment** | \u6AA2\u9644\u55AE\u64DA | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u8CBC\u4E0A\u767C\u7968\u3001\u6536\u64DA\u6216\u76F8\u95DC\u6191\u8B49\u4E4B\u96F2\u7AEF/\u5171\u4EAB\u8CC7\u6599\u593E\u9023\u7D50 |`,
-        logicMarkdown: `# \u8ACB\u6B3E\u55AE (RD) \u7C3D\u6838\u908F\u8F2F\u77E9\u9663
+| **attachment** | \u6AA2\u9644\u55AE\u64DA | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u8CBC\u4E0A\u767C\u7968\u3001\u6536\u64DA\u6216\u76F8\u95DC\u6191\u8B49\u4E4B\u96F2\u7AEF/\u5171\u4EAB\u8CC7\u6599\u593E\u9023\u7D50 |
+| **attachment_version_note** | \u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u55AE\u64DA\u6216\u6191\u8B49\u6709\u591A\u7248\uFF0C\u8ACB\u88DC\u5145\u7248\u672C\u6216\u5DEE\u7570\u8AAA\u660E |`,
+        logicMarkdown: `# \u8ACB\u6B3E\u55AE (RD) \u5F8C\u53F0\u8655\u7406\u898F\u5247
 
-\u8ACB\u6B3E\u55AE\u7C3D\u6838\u4F9D\u64DA\u8ACB\u6B3E\u91D1\u984D\u5BE6\u65BD\u5206\u7D1A\u6388\u6B0A\u3002\u91D1\u984D\u5927\u65BC\u65B0\u53F0\u5E63 5,000 \u5143\u6642\u5C07\u81EA\u52D5\u52A0\u6703\u9AD8\u968E\u4E3B\u7BA1\u3002
+\u8ACB\u6B3E\u55AE\u7528\u65BC\u8ACB\u6B3E\u7D00\u9304\u3001\u4F86\u6E90\u55AE\u865F\u52FE\u7A3D\u3001\u9644\u4EF6\u7BA1\u63A7\u8207\u8CA1\u52D9\u5F8C\u53F0\u8655\u7406\u8FFD\u8E64\u3002
 
 \`\`\`mermaid
 graph TD
-    Start([1. \u7533\u8ACB\u4EBA\u9001\u51FA]) --> Stage1[2. \u76F4\u5C6C\u4E3B\u7BA1\u7C3D\u6838]
-    Stage1 --> Stage2[3. \u672C\u90E8\u90E8\u9577\u7C3D\u6838]
-    Stage2 --> Cond{\u8ACB\u6B3E\u91D1\u984D > 5,000 \u5143?}
-    Cond -- \u662F --> Stage3[4. \u884C\u653F\u526F\u7E3D\u5BE9\u6838]
-    Stage3 --> Stage4[5. \u7E3D\u7D93\u7406\u6838\u6C7A]
-    Stage4 --> End([\u7C3D\u6838\u5B8C\u6210\u4E26\u64A5\u6B3E])
-    Cond -- \u5426 --> End
+    Start([\u7533\u8ACB\u4EBA\u9001\u51FA]) --> Ticket[\u7CFB\u7D71\u7522\u751F RD \u55AE\u865F]
+    Ticket --> Relation{\u6709\u586B\u76F8\u95DC\u55AE\u865F?}
+    Relation -- \u662F --> Link[\u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u8207 RD \u95DC\u806F]
+    Relation -- \u5426 --> Record[\u4FDD\u5B58\u8ACB\u6B3E\u8CC7\u6599]
+    Link --> Record
+    Record --> Attachment[\u8A18\u9304\u9644\u4EF6\u8207\u9023\u7D50\u8B66\u793A]
+    Attachment --> Finance[\u8CA1\u52D9/\u5F8C\u53F0\u8655\u7406]
+    Finance --> Done[\u5B8C\u6210\u7D50\u6848\u4E26\u4FDD\u7559\u7A3D\u6838\u8ECC\u8DE1]
 \`\`\`
 
-### \u7C3D\u6838\u95DC\u5361\u660E\u7D30
+### \u5F8C\u53F0\u8655\u7406\u91CD\u9EDE
 
-| \u95DC\u5361 | \u7C3D\u6838\u89D2\u8272 | \u89F8\u767C\u689D\u4EF6 | \u8AAA\u660E |
-| :--- | :--- | :--- | :--- |
-| **\u7B2C 1 \u95DC** | \u76F4\u5C6C\u4E3B\u7BA1 (MANAGER) | \u7121\u689D\u4EF6 | \u7533\u8ACB\u4EBA\u4E4B\u76F4\u5C6C\u4E3B\u7BA1\u9032\u884C\u521D\u6B65\u9810\u7B97\u8207\u5408\u7406\u6027\u5BE9\u67E5 |
-| **\u7B2C 2 \u95DC** | \u90E8\u9580\u7D93\u7406/\u90E8\u9577 (DEPT_HEAD) | \u7121\u689D\u4EF6 | \u90E8\u9580\u4E00\u7D1A\u4E3B\u7BA1\u4E4B\u8907\u5BE9\u8207\u984D\u5EA6\u78BA\u8A8D |
-| **\u7B2C 3 \u95DC** | \u884C\u653F\u526F\u7E3D (ADMIN_VP) | **amount > 5000** | \u91D1\u984D\u8D85\u904E 5,000 \u5143\u6642\u52A0\u6703\u884C\u653F\u526F\u7E3D\u9032\u884C\u516C\u53F8\u7D1A\u5BE9\u67E5 |
-| **\u7B2C 4 \u95DC** | \u7E3D\u7D93\u7406 (GM) | **amount > 5000** | \u91D1\u984D\u8D85\u904E 5,000 \u5143\u6642\u9700\u7D93\u7E3D\u7D93\u7406\u6700\u7D42\u6838\u51C6 |`,
+| \u9805\u76EE | \u89F8\u767C\u689D\u4EF6 | \u8655\u7406\u91CD\u9EDE |
+| :--- | :--- | :--- |
+| \u55AE\u865F\u7D00\u9304 | \u9001\u51FA\u8868\u55AE | \u7522\u751F RD \u55AE\u865F\u4E26\u4FDD\u5B58\u8ACB\u6B3E\u8CC7\u6599 |
+| \u55AE\u865F\u52FE\u7A3D | related_ticket \u6709\u503C | \u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u81F3\u672C\u8ACB\u6B3E\u55AE\u7684\u95DC\u806F |
+| AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5 | \u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u4E14\u6709\u7D71\u7DE8 | \u540C\u6B65 AML \u8ABF\u67E5\u8CC7\u6599\u4E26\u56DE\u5BEB\u67E5\u6838\u7D50\u679C |
+| \u9644\u4EF6\u6AA2\u67E5 | \u9644\u4EF6\u6B04\u4F4D\u6709\u503C | \u8A18\u9304\u9644\u4EF6\u7248\u672C\u8AAA\u660E\u8207\u9023\u7D50\u6AA2\u67E5\u8B66\u793A |`,
         configJSON: {
           fields: [
             { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F)", type: "text", required: false },
@@ -625,7 +965,8 @@ graph TD
             { id: "payment_date", label: "\u4ED8\u6B3E\u671F\u9650", type: "date", required: true },
             { id: "payment_method", label: "\u4ED8\u6B3E\u65B9\u5F0F", type: "select", options: ["\u532F\u6B3E", "\u73FE\u91D1", "\u5DF2\u7531\u7533\u8ACB\u4EBA\u4EE3\u588A"], required: true },
             { id: "description", label: "\u8ACB\u6B3E\u7528\u9014\u8AAA\u660E", type: "textarea", required: true },
-            { id: "attachment", label: "\u6AA2\u9644\u55AE\u64DA (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF/\u8CC7\u6599\u593E\u9023\u7D50)", type: "text", required: true }
+            { id: "attachment", label: "\u6AA2\u9644\u55AE\u64DA (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF/\u8CC7\u6599\u593E\u9023\u7D50)", type: "text", required: true },
+            { id: "attachment_version_note", label: "\u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E", type: "text", required: false }
           ]
         }
       },
@@ -640,44 +981,39 @@ graph TD
 | **related_ticket** | \u76F8\u95DC\u55AE\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F\u6216\u5408\u7D04\u55AE\u865F\uFF0C\u4FBF\u65BC\u5F8C\u7E8C\u6838\u5C0D |
 | **seal_type** | \u7528\u5370\u985E\u5225 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\uFF1A\u300C\u7D93\u6FDF\u90E8\u7AE0\u300D\u3001\u300C\u9280\u884C\u7528\u7AE0\u300D\u3001\u300C\u6CD5\u52D9\u7AE0\u300D\u3001\u300C\u767C\u7968\u7AE0\u300D\u3001\u300C\u5408\u7D04\u4FBF\u7AE0\u300D |
 | **description** | \u7528\u5370\u6587\u4EF6\u8AAA\u660E | \u591A\u884C\u6587\u5B57 | \u662F | \u8ACB\u8A73\u7D30\u8AAA\u660E\u672C\u6B21\u7528\u5370\u4E4B\u6587\u4EF6\u540D\u7A31\u3001\u7528\u9014\u8207\u4EFD\u6578 |
-| **attachment** | \u7528\u5370\u6587\u4EF6\u8349\u7A3F | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u8CBC\u4E0A\u5F85\u7528\u5370\u6587\u4EF6\u8349\u7A3F\u4E4B\u96F2\u7AEF\u9023\u7D50\u4EE5\u4F9B\u5BE9\u6838 |`,
-        logicMarkdown: `# \u7528\u5370\u7533\u8ACB\u55AE (CS) \u7C3D\u6838\u908F\u8F2F\u77E9\u9663
+| **attachment** | \u7528\u5370\u6587\u4EF6\u8349\u7A3F | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u8CBC\u4E0A\u5F85\u7528\u5370\u6587\u4EF6\u8349\u7A3F\u4E4B\u96F2\u7AEF\u9023\u7D50 |
+| **attachment_version_note** | \u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u6587\u4EF6\u8349\u7A3F\u6709\u591A\u7248\uFF0C\u8ACB\u88DC\u5145\u7248\u672C\u6216\u5DEE\u7570\u8AAA\u660E |`,
+        logicMarkdown: `# \u7528\u5370\u7533\u8ACB\u55AE (CS) \u5F8C\u53F0\u8655\u7406\u898F\u5247
 
-\u7528\u5370\u7C3D\u6838\u4F9D\u64DA\u5370\u4FE1\u7A2E\u985E\u4E4B\u91CD\u8981\u6027\u9032\u884C\u5206\u7D1A\u7C3D\u6838\u3002\u91CD\u5927\u5370\u4FE1\uFF08\u975E\u767C\u7968\u7AE0\uFF09\u5747\u9700\u7D93\u9AD8\u968E\u4E3B\u7BA1\u8207\u5370\u4FE1\u7BA1\u7406\u4EBA\u6838\u653E\u3002
+\u7528\u5370\u7533\u8ACB\u55AE\u7528\u65BC\u7528\u5370\u9700\u6C42\u7D00\u9304\u3001\u4F86\u6E90\u55AE\u865F\u52FE\u7A3D\u3001\u9644\u4EF6\u7248\u672C\u7BA1\u63A7\u8207\u5F8C\u53F0\u7D50\u6848\u8FFD\u8E64\u3002
 
 \`\`\`mermaid
 graph TD
-    Start([1. \u7533\u8ACB\u4EBA\u9001\u51FA]) --> CondLegal{\u662F\u5426\u70BA\u5408\u7D04\u4FBF\u7AE0?}
-    CondLegal -- \u662F --> StageLegal[2. \u6CD5\u52D9\u5BE9\u67E5]
-    CondLegal -- \u5426 --> StageManager[3. \u76F4\u5C6C\u4E3B\u7BA1\u7C3D\u6838]
-    StageLegal --> StageManager
-    StageManager --> StageDept[4. \u672C\u90E8\u90E8\u9577\u7C3D\u6838]
-    StageDept --> CondBig{\u662F\u5426\u70BA\u767C\u7968\u7AE0?}
-    CondBig -- \u5426 (\u7D93\u6FDF\u90E8\u7AE0/\u9280\u884C\u7528\u7AE0/\u6CD5\u52D9\u7AE0/\u5408\u7D04\u4FBF\u7AE0) --> StageVP[5. \u884C\u653F\u526F\u7E3D\u5BE9\u6838]
-    StageVP --> StageGM[6. \u7E3D\u7D93\u7406\u6838\u6C7A]
-    StageGM --> StageBig[7. \u5927\u7AE0\u7BA1\u7406\u4EBA\u84CB\u7AE0]
-    StageBig --> StageSmall[8. \u5C0F\u7AE0\u7BA1\u7406\u4EBA\u84CB\u7AE0]
-    StageSmall --> End([\u5B8C\u6210\u7528\u5370\u4E26\u6B78\u6A94])
-    CondBig -- \u662F (\u767C\u7968\u7AE0\u7531\u90E8\u9580\u5167\u63A7\u76F4\u63A5\u63D0\u65E9\u7D50\u6848) --> End
+    Start([\u7533\u8ACB\u4EBA\u9001\u51FA]) --> Ticket[\u7CFB\u7D71\u7522\u751F CS \u55AE\u865F]
+    Ticket --> Relation{\u6709\u586B\u76F8\u95DC\u55AE\u865F?}
+    Relation -- \u662F --> Link[\u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u8207 CS \u95DC\u806F]
+    Relation -- \u5426 --> Record[\u4FDD\u5B58\u7528\u5370\u8CC7\u6599]
+    Link --> Record
+    Record --> Attachment[\u8A18\u9304\u6587\u4EF6\u7248\u672C\u8207\u9023\u7D50\u8B66\u793A]
+    Attachment --> Backoffice[\u5F8C\u53F0\u8655\u7406\u8207\u7528\u5370\u7BA1\u5236]
+    Backoffice --> Done[\u5B8C\u6210\u7D50\u6848\u4E26\u4FDD\u7559\u7A3D\u6838\u8ECC\u8DE1]
 \`\`\`
 
-### \u7C3D\u6838\u95DC\u5361\u660E\u7D30
+### \u5F8C\u53F0\u8655\u7406\u91CD\u9EDE
 
-| \u95DC\u5361 | \u7C3D\u6838\u89D2\u8272 | \u89F8\u767C\u689D\u4EF6 | \u8AAA\u660E |
-| :--- | :--- | :--- | :--- |
-| **\u7B2C 1 \u95DC** | \u6CD5\u52D9\u8655 (ROLE:LEGAL) | **seal_type == '\u5408\u7D04\u4FBF\u7AE0'** | \u5408\u7D04\u985E\u6587\u4EF6\u9700\u7531\u6CD5\u52D9\u8655\u9032\u884C\u5408\u7D04\u689D\u6B3E\u8207\u5408\u898F\u6027\u9996\u7C3D\u5BE9\u67E5 |
-| **\u7B2C 2 \u95DC** | \u76F4\u5C6C\u4E3B\u7BA1 (MANAGER) | \u7121\u689D\u4EF6 | \u7533\u8ACB\u4EBA\u4E4B\u76F4\u63A5\u4E3B\u7BA1\u521D\u6B65\u5BE9\u67E5\u7528\u5370\u5408\u7406\u6027 |
-| **\u7B2C 3 \u95DC** | \u90E8\u9580\u7D93\u7406/\u90E8\u9577 (DEPT_HEAD) | \u7121\u689D\u4EF6 | \u90E8\u9580\u4E00\u7D1A\u4E3B\u7BA1\u8907\u5BE9 |
-| **\u7B2C 4 \u95DC** | \u884C\u653F\u526F\u7E3D (ADMIN_VP) | **seal_type != '\u767C\u7968\u7AE0'** | \u91CD\u5927\u5370\u4FE1\u7528\u5370\u9700\u7D93\u7BA1\u7406\u672C\u90E8\u6700\u9AD8\u4E3B\u7BA1\u6838\u51C6 |
-| **\u7B2C 5 \u95DC** | \u7E3D\u7D93\u7406 (GM) | **seal_type != '\u767C\u7968\u7AE0'** | \u91CD\u5927\u5370\u4FE1\u7528\u5370\u9700\u7D93\u7E3D\u7D93\u7406\u6700\u7D42\u6838\u51C6 |
-| **\u7B2C 6 \u95DC** | \u5927\u7AE0\u7BA1\u7406\u4EBA (ROLE:BIG_SEAL_MGR) | **seal_type != '\u767C\u7968\u7AE0'** | \u5927\u7AE0\u5C08\u8CAC\u4FDD\u7BA1\u4EBA\u54E1\u57F7\u884C\u7528\u5370\u64CD\u4F5C\u8207\u767B\u8A18 |
-| **\u7B2C 7 \u95DC** | \u5C0F\u7AE0\u7BA1\u7406\u4EBA (ROLE:SMALL_SEAL_MGR) | **seal_type != '\u767C\u7968\u7AE0'** | \u5C0F\u7AE0\u5C08\u8CAC\u4FDD\u7BA1\u4EBA\u54E1\u57F7\u884C\u7528\u5370\u64CD\u4F5C\u8207\u767B\u8A18 |`,
+| \u9805\u76EE | \u89F8\u767C\u689D\u4EF6 | \u8655\u7406\u91CD\u9EDE |
+| :--- | :--- | :--- |
+| \u55AE\u865F\u7D00\u9304 | \u9001\u51FA\u8868\u55AE | \u7522\u751F CS \u55AE\u865F\u4E26\u4FDD\u5B58\u7528\u5370\u9700\u6C42 |
+| \u55AE\u865F\u52FE\u7A3D | related_ticket \u6709\u503C | \u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u81F3\u672C\u7528\u5370\u7533\u8ACB\u55AE\u7684\u95DC\u806F |
+| \u7528\u5370\u7BA1\u5236 | seal_type \u6709\u503C | \u5F8C\u53F0\u4F9D\u516C\u53F8\u5167\u63A7\u7A0B\u5E8F\u8655\u7406\u8207\u7D50\u6848 |
+| \u9644\u4EF6\u6AA2\u67E5 | \u9644\u4EF6\u6B04\u4F4D\u6709\u503C | \u8A18\u9304\u6587\u4EF6\u7248\u672C\u8AAA\u660E\u8207\u9023\u7D50\u6AA2\u67E5\u8B66\u793A |`,
         configJSON: {
           fields: [
             { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F)", type: "text", required: false },
             { id: "seal_type", label: "\u7528\u5370\u985E\u5225", type: "select", options: ["\u7D93\u6FDF\u90E8\u7AE0", "\u9280\u884C\u7528\u7AE0", "\u6CD5\u52D9\u7AE0", "\u767C\u7968\u7AE0", "\u5408\u7D04\u4FBF\u7AE0"], required: true },
             { id: "description", label: "\u7528\u5370\u6587\u4EF6\u8AAA\u660E", type: "textarea", required: true },
-            { id: "attachment", label: "\u7528\u5370\u6587\u4EF6\u8349\u7A3F (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF\u9023\u7D50)", type: "text", required: true }
+            { id: "attachment", label: "\u7528\u5370\u6587\u4EF6\u8349\u7A3F (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF\u9023\u7D50)", type: "text", required: true },
+            { id: "attachment_version_note", label: "\u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E", type: "text", required: false }
           ]
         }
       }
@@ -703,7 +1039,7 @@ graph TD
       const merged = fetchedDefinitions.map((def) => {
         const local = localDefinitions.find((l) => l.formId === def.formId);
         if (local) {
-          const forceLocalDefinition = def.formId === "RD";
+          const forceLocalDefinition = ["AP", "RD", "CS"].includes(def.formId);
           return {
             ...def,
             fieldsMarkdown: forceLocalDefinition ? local.fieldsMarkdown : def.fieldsMarkdown && def.fieldsMarkdown.trim() ? def.fieldsMarkdown : local.fieldsMarkdown,
@@ -763,16 +1099,29 @@ graph TD
       const response = await fetch(`${scriptUrl}?action=getRules&formType=${formType}`);
       const data = await response.json();
       const rows = data.data || [];
-      const rules = rows.slice(1).map((r) => ({
-        id: r[0],
-        stage: Number(r[2]),
-        conditionField: r[3] || "",
-        conditionOp: r[4] || "",
-        conditionVal: r[5] || "",
-        approverType: normalizeGeneratedApproverType(r[6]),
-        approverValue: r[7] || ""
-      }));
-      rules.sort((a, b) => a.stage - b.stage);
+      const headers = rows[0] || [];
+      const headerIndex = buildHeaderIndex(headers);
+      const isLegacyWorkflow = headerIndex.Stage != null || headerIndex.ApproverType != null;
+      const rules = rows.slice(1).map((r, index) => isLegacyWorkflow ? {
+        id: r[0] || `legacy-${index}`,
+        ruleName: `\u820A\u898F\u5247\u7B2C ${r[2] || index + 1} \u7B46`,
+        triggerField: r[3] || "ALWAYS",
+        triggerOp: r[4] || "ALWAYS",
+        triggerValue: r[5] || "",
+        handlingRole: normalizeGeneratedHandlingRole(r[7] || r[6] || "ROLE:ADMIN"),
+        handlingNote: "\u7531\u820A WorkflowRules \u8F49\u63DB\u986F\u793A\uFF0C\u8ACB\u5132\u5B58\u5F8C\u6539\u7528\u65B0\u7248\u5F8C\u53F0\u8655\u7406\u898F\u5247\u3002",
+        isActive: "FALSE"
+      } : {
+        id: readCell(r, headerIndex, "RuleID", 0),
+        ruleName: readCell(r, headerIndex, "RuleName", 2),
+        triggerField: readCell(r, headerIndex, "TriggerField", 3),
+        triggerOp: readCell(r, headerIndex, "TriggerOp", 4),
+        triggerValue: readCell(r, headerIndex, "TriggerValue", 5),
+        handlingRole: normalizeGeneratedHandlingRole(readCell(r, headerIndex, "HandlingRole", 6)),
+        handlingNote: readCell(r, headerIndex, "HandlingNote", 7),
+        isActive: readCell(r, headerIndex, "IsActive", 8) || "TRUE"
+      });
+      rules.sort((a, b) => String(a.ruleName || "").localeCompare(String(b.ruleName || ""), "zh-Hant"));
       res.json({ rules });
     } catch (error) {
       console.error("Error fetching rules:", error);
@@ -789,12 +1138,14 @@ graph TD
       const rows = rules.map((r) => [
         r.id,
         formType,
-        r.stage,
-        r.conditionField,
-        r.conditionOp,
-        r.conditionVal,
-        r.approverType,
-        r.approverValue
+        r.ruleName || "",
+        r.triggerField || "ALWAYS",
+        r.triggerOp || "ALWAYS",
+        r.triggerValue || "",
+        normalizeGeneratedHandlingRole(r.handlingRole),
+        r.handlingNote || "",
+        r.isActive === false || r.isActive === "FALSE" ? "FALSE" : "TRUE",
+        (/* @__PURE__ */ new Date()).toISOString()
       ]);
       const response = await fetch(scriptUrl, {
         method: "POST",
@@ -823,6 +1174,7 @@ graph TD
         const mockId = `${firstTicket.formType || "AP"}${extractDeptCode(department)}${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "")}001`;
         return res.json({ success: true, generatedIds: [mockId], applicationNumber: mockId, source: "mock" });
       }
+      const attachmentChecks = await buildAttachmentChecks(firstTicket.formData || {});
       const result = await postToAppsScript(scriptUrl, {
         action: "submitApplication",
         applicantEmail,
@@ -831,74 +1183,22 @@ graph TD
         formType: firstTicket.formType,
         subject: firstTicket.subject || "",
         amount: firstTicket.amount || "",
-        formData: firstTicket.formData || {}
+        formData: firstTicket.formData || {},
+        attachmentChecks
       });
+      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks"]);
       return res.json({
         success: true,
         generatedIds: [result.applicationNumber],
         applicationNumber: result.applicationNumber,
-        amlStatus: result.amlStatus
+        amlStatus: result.amlStatus,
+        attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === "Warning" || item.warning)
       });
     } catch (error) {
       console.error("Error submitting application:", error);
       return res.status(500).json({ error: error.message || "Internal Server Error" });
     }
   });
-  const evaluateDynamicRules = (rules, currentStage, formData, formType, applicantEmail, usersData) => {
-    const formRules = rules.filter((r) => r[1] === formType && Number(r[2]) > currentStage).sort((a, b) => Number(a[2]) - Number(b[2]));
-    if (formRules.length === 0) return { stage: "END", approver: "" };
-    const stages = [...new Set(formRules.map((r) => Number(r[2])))];
-    for (const stage of stages) {
-      const stageRules = formRules.filter((r) => Number(r[2]) === stage);
-      for (const rule of stageRules) {
-        const conditionField = rule[3];
-        const conditionOp = rule[4];
-        const conditionVal = rule[5];
-        const approverType = rule[6];
-        const approverValue = rule[7];
-        let isMatch = false;
-        if (conditionField === "ALWAYS" && String(conditionOp).toUpperCase() === "TRUE") {
-          isMatch = true;
-        } else {
-          let actualVal = formData[conditionField];
-          if (conditionOp === ">") isMatch = Number(actualVal) > Number(conditionVal);
-          else if (conditionOp === "==") isMatch = String(actualVal) === String(conditionVal);
-          else if (conditionOp === "IN") {
-            const allowed = conditionVal.split(",").map((s) => s.trim());
-            isMatch = allowed.includes(actualVal);
-          }
-        }
-        if (isMatch) {
-          let assignedApprover = "";
-          const applicantRow = usersData.find((u) => u[0]?.toLowerCase() === applicantEmail.toLowerCase());
-          if (approverType === "MANAGER") {
-            assignedApprover = applicantRow ? applicantRow[3] : "";
-          } else if (approverType === "ROLE") {
-            assignedApprover = String(approverValue);
-          } else {
-            assignedApprover = String(approverValue);
-          }
-          if (assignedApprover) {
-            let shouldSkip = false;
-            if (approverType === "MANAGER" && assignedApprover.toLowerCase() === applicantEmail.toLowerCase()) {
-              shouldSkip = true;
-            }
-            if (approverType === "ROLE" && applicantRow) {
-              const myRoles = String(applicantRow[4] || "").split(",").map((s) => s.trim());
-              if (myRoles.includes(assignedApprover)) {
-                shouldSkip = true;
-              }
-            }
-            if (shouldSkip) {
-              break;
-            }
-          }
-          return { stage: Number(stage), approver: assignedApprover };
-        }
-      }
-    }
-    return { stage: "END", approver: "" };
-  };
   app.post("/api/tickets/:ticketId/resubmit", authMiddleware, async (req, res) => {
     const { ticketId } = req.params;
     const { formData = {}, amount, subject } = req.body;
@@ -911,53 +1211,32 @@ graph TD
       return res.json({ success: true, message: "Mock resubmit successful" });
     }
     try {
-      const [ticketsRes, rulesRes, usersRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=Tickets`),
-        fetch(`${scriptUrl}?action=getData&sheet=WorkflowRules`),
-        fetch(`${scriptUrl}?action=getData&sheet=Users`)
-      ]);
-      const ticketsData = await ticketsRes.json();
-      const rulesData = await rulesRes.json();
-      const usersData = await usersRes.json();
-      const ticketRow = (ticketsData.data || []).find((r) => r[0] === ticketId);
-      if (!ticketRow) throw new Error("Ticket not found");
-      const formType = ticketRow[5];
-      const applicantEmail = String(ticketRow[2] || "").toLowerCase();
+      const ticketRows = await getSheetRows(scriptUrl, "Tickets");
+      const tickets = parseTicketRows(ticketRows);
+      const ticket = tickets.find((item) => item.id === ticketId);
+      if (!ticket) throw new Error("Ticket not found");
+      const applicantEmail = String(ticket.applicantEmail || "").toLowerCase();
       if (!isSameUserOrAdmin(applicantEmail, req.user)) {
         return res.status(403).json({ error: "Forbidden" });
       }
-      if (String(ticketRow[6] || "") !== "Rejected") {
+      if (String(ticket.status || "") !== "Rejected") {
         return res.status(400).json({ error: "Only rejected tickets can be resubmitted" });
       }
-      const allRules = rulesData.data || [];
-      const allUsers = usersData.data || [];
-      const next = evaluateDynamicRules(allRules, 0, formData, formType, applicantEmail, allUsers);
-      let newStatus = "Pending";
-      let newStage = next.stage;
-      let newApprover = next.approver;
-      if (next.stage === "END") {
-        newStatus = "Approved";
-        newStage = "END";
-        newApprover = "";
-      }
-      const response = await fetch(scriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "resubmitTicket",
-          ticketId,
-          status: newStatus,
-          stage: newStage,
-          nextApprover: newApprover,
-          subject,
-          amount,
-          formData,
-          approverEmail: applicantEmail
-        })
+      const attachmentChecks = await buildAttachmentChecks(formData);
+      const result = await postToAppsScript(scriptUrl, {
+        action: "resubmitTicket",
+        ticketId,
+        status: "Submitted",
+        stage: "",
+        nextApprover: "",
+        subject,
+        amount,
+        formData,
+        actorEmail: req.user?.email || applicantEmail,
+        attachmentChecks
       });
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
-      res.json({ success: true, newStatus, newStage, newApprover });
+      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks"]);
+      res.json({ success: true, newStatus: "Submitted", newStage: "", newApprover: "", attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === "Warning" || item.warning), result });
     } catch (error) {
       console.error("Error resubmitting ticket:", error);
       res.status(500).json({ error: error.message });
@@ -977,30 +1256,25 @@ graph TD
       return res.json({ tickets: [mockTickets[0], mockTickets[1]], source: "mock" });
     }
     try {
-      const ticketsRes = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
-      const ticketsData = await ticketsRes.json();
-      const rows = ticketsData.data || [];
-      const myTickets = rows.slice(1).filter((r) => {
-        return r[2]?.toLowerCase() === email;
-      }).map((r) => {
-        const status = r[6];
-        const isCompleted = status === "Completed" || status === "Approved";
-        return {
-          id: r[0],
-          createdAt: r[1],
-          applicantEmail: r[2],
-          applicantName: r[3],
-          dept: r[4],
-          formType: r[5],
-          status,
-          stage: isCompleted ? "END" : r[7],
-          subject: r[9],
-          amount: r[10],
-          formData: r[12] ? JSON.parse(r[12]) : {},
-          currentApprover: ""
-        };
+      await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
+        console.warn("AML/RP sync skipped before my tickets fetch:", error.message);
       });
-      myTickets.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      invalidateSheetCache(scriptUrl, ["Tickets"]);
+      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+        getSheetRows(scriptUrl, "Tickets"),
+        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders)
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap, attachmentMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      const myTickets = enrichTickets(
+        allTickets.filter((ticket) => ticket.applicantEmail.toLowerCase() === email),
+        relationMap,
+        attachmentMap
+      ).map((ticket) => ({ ...ticket, currentApprover: "", rpResult: normalizeRpDisplay(ticket.rpResult) }));
+      myTickets.sort((a, b) => parseTaipeiDateMs(b.createdAt) - parseTaipeiDateMs(a.createdAt));
       res.json({ tickets: myTickets });
     } catch (error) {
       console.error("Error fetching my tickets:", error);
@@ -1034,23 +1308,20 @@ graph TD
       return res.json({ tickets: [], source: "mock" });
     }
     try {
-      const response = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
-      const data = await response.json();
-      const rows = data.data || [];
-      const tickets = rows.slice(1).map((row) => ({
-        id: row[0],
-        createdAt: row[1],
-        applicantEmail: row[2],
-        applicantName: row[3],
-        dept: row[4],
-        formType: row[5],
-        status: row[6],
-        stage: row[6] === "Completed" || row[6] === "Approved" ? "END" : row[7],
-        subject: row[9],
-        amount: row[10],
-        formData: parseJsonCell(row[12]),
-        currentApprover: row[6] === "Completed" || row[6] === "Approved" ? "" : row[13] || ""
-      })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
+        console.warn("AML/RP sync skipped before backoffice tickets fetch:", error.message);
+      });
+      invalidateSheetCache(scriptUrl, ["Tickets"]);
+      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+        getSheetRows(scriptUrl, "Tickets"),
+        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders)
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap, attachmentMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      const tickets = enrichTickets(allTickets, relationMap, attachmentMap).map((ticket) => ({ ...ticket, rpResult: normalizeRpDisplay(ticket.rpResult) })).sort((a, b) => parseTaipeiDateMs(b.createdAt) - parseTaipeiDateMs(a.createdAt));
       res.json({ tickets });
     } catch (error) {
       console.error("Error fetching backoffice tickets:", error);
@@ -1070,10 +1341,143 @@ graph TD
         completedBy: req.user?.email,
         note: req.body?.note || ""
       });
+      invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs"]);
       res.json(result);
     } catch (error) {
       console.error("Error completing ticket:", error);
       res.status(500).json({ error: error.message || "Failed to complete ticket" });
+    }
+  });
+  app.get("/api/tickets/:ticketId/relations", authMiddleware, async (req, res) => {
+    const { ticketId } = req.params;
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!scriptUrl || ticketId.startsWith("DEMO-")) {
+      return res.json({ relations: [], source: "mock" });
+    }
+    try {
+      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+        getSheetRows(scriptUrl, "Tickets"),
+        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders)
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const requestedTicket = allTickets.find((ticket) => ticket.id === ticketId);
+      if (!requestedTicket) return res.status(404).json({ error: "Ticket not found" });
+      const ownsTicket = requestedTicket.applicantEmail.toLowerCase() === req.user?.email.toLowerCase();
+      if (!ownsTicket && !canAccessBackoffice(req.user)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      res.json({ relations: relationMap.get(ticketId) || [] });
+    } catch (error) {
+      console.error("Error fetching ticket relations:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch ticket relations" });
+    }
+  });
+  app.get("/api/backoffice/audit-export", authMiddleware, async (req, res) => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!canAccessBackoffice(req.user)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    if (!scriptUrl) return res.status(503).json({ error: "GAS URL not configured" });
+    try {
+      await postToAppsScript(scriptUrl, { action: "syncAmlRpResults" }).catch((error) => {
+        console.warn("AML/RP sync skipped before audit export:", error.message);
+      });
+      invalidateSheetCache(scriptUrl, ["Tickets"]);
+      const [ticketRows, logRows, relationRows, attachmentRows, amlResult] = await Promise.all([
+        getSheetRows(scriptUrl, "Tickets", 5e3),
+        getOptionalSheetRows(scriptUrl, "AuditLogs", ["TicketID", "ActionType", "ApproverID", "Stage", "Comment", "Timestamp"]),
+        getOptionalSheetRows(scriptUrl, "TicketRelations", ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, "AttachmentChecks", attachmentCheckHeaders),
+        fetchJson(`${scriptUrl}?action=getAmlData`).catch(() => ({ success: true, data: [] }))
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      const tickets = allTickets.filter((ticket) => matchesAuditFilters(ticket, req.query, relationMap.get(ticket.id) || [])).sort((a, b) => parseTaipeiDateMs(b.createdAt) - parseTaipeiDateMs(a.createdAt));
+      const selectedTicketIds = new Set(tickets.map((ticket) => ticket.id));
+      const logs = (logRows || []).slice(1).filter((row) => selectedTicketIds.has(String(row[0] || "")));
+      const relations = allRelations.filter(
+        (relation) => selectedTicketIds.has(relation.sourceTicketId) || selectedTicketIds.has(relation.targetTicketId)
+      );
+      const attachments = allAttachments.filter((item) => selectedTicketIds.has(item.ticketId));
+      const amlRows = Array.isArray(amlResult.data) ? amlResult.data : [];
+      const amlHeaders = amlRows[0] || [];
+      const amlIndex = buildHeaderIndex(amlHeaders);
+      const amlTicketIndex = amlIndex["\u8868\u55AE\u7DE8\u865F"] ?? 2;
+      const amlRecords = amlRows.slice(1).filter((row) => selectedTicketIds.has(String(row[amlTicketIndex] || "")));
+      const workbook = buildExcelWorkbook([
+        {
+          name: "Tickets",
+          headers: ["\u55AE\u865F", "\u5EFA\u7ACB\u6642\u9593", "\u7533\u8ACB\u4EBA", "\u90E8\u9580", "\u8868\u55AE", "\u72C0\u614B", "\u4E3B\u65E8", "\u91D1\u984D", "\u7D71\u7DE8", "\u5546\u5BB6", "AML\u7D50\u679C", "\u95DC\u4FC2\u4EBA\u7D50\u679C", "\u95DC\u806F\u6578", "\u9644\u4EF6\u8B66\u793A\u6578"],
+          rows: tickets.map((ticket) => [
+            ticket.id,
+            ticket.createdAt,
+            `${ticket.applicantName} (${ticket.applicantEmail})`,
+            ticket.dept,
+            ticket.formType,
+            ticket.status,
+            ticket.subject,
+            ticket.amount,
+            ticket.formData?.ext_tax_id || "",
+            ticket.formData?.ext_company_name || ticket.formData?.vendor_name || "",
+            ticket.amlResult,
+            normalizeRpDisplay(ticket.rpResult),
+            relationMap.get(ticket.id)?.length || 0,
+            allAttachments.filter((item) => item.ticketId === ticket.id && (item.checkStatus === "Warning" || item.warning)).length
+          ])
+        },
+        {
+          name: "AuditLogs",
+          headers: ["\u55AE\u865F", "\u52D5\u4F5C", "\u64CD\u4F5C\u4EBA", "\u968E\u6BB5", "\u5099\u8A3B", "\u6642\u9593"],
+          rows: logs.map((row) => [row[0], row[1], row[2], row[3], row[4], row[5]])
+        },
+        {
+          name: "Relations",
+          headers: ["\u95DC\u806FID", "\u4F86\u6E90\u55AE\u865F", "\u76EE\u6A19\u55AE\u865F", "\u95DC\u4FC2\u8AAA\u660E", "\u5099\u8A3B", "\u5EFA\u7ACB\u4EBA", "\u5EFA\u7ACB\u6642\u9593", "\u4F86\u6E90\u6B04\u4F4D", "\u72C0\u614B"],
+          rows: relations.map((relation) => [
+            relation.id,
+            relation.sourceTicketId,
+            relation.targetTicketId,
+            relation.relationType,
+            relation.note,
+            relation.createdBy,
+            relation.createdAt,
+            relation.sourceField,
+            relation.status
+          ])
+        },
+        {
+          name: "AML_RP",
+          headers: amlHeaders.length ? amlHeaders.map(String) : ["\u7121 AML \u8CC7\u6599"],
+          rows: amlRecords.length ? amlRecords : []
+        },
+        {
+          name: "Attachments",
+          headers: ["\u9644\u4EF6ID", "\u55AE\u865F", "\u6B04\u4F4D", "\u9023\u7D50", "\u7248\u672C\u8AAA\u660E", "\u6AA2\u67E5\u72C0\u614B", "\u8B66\u793A", "\u6AA2\u67E5\u6642\u9593"],
+          rows: attachments.map((item) => [
+            item.id,
+            item.ticketId,
+            item.fieldKey,
+            item.url,
+            item.versionNote,
+            item.checkStatus,
+            item.warning,
+            item.checkedAt
+          ])
+        }
+      ]);
+      const filename = `audit-export-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.xls`;
+      res.setHeader("Content-Type", "application/vnd.ms-excel; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.send(workbook);
+    } catch (error) {
+      console.error("Error exporting audit package:", error);
+      res.status(500).json({ error: error.message || "Failed to export audit package" });
     }
   });
   app.get("/api/meeting-rooms", authMiddleware, async (req, res) => {

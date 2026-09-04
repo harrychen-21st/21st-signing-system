@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, ListFilter, Printer, Edit3, Search } from 'lucide-react';
+import { Mail, Loader2, CheckCircle, XCircle, Clock, FileText, Activity, ListFilter, Printer, Edit3, Search, Link2, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 interface AuditLog {
@@ -23,8 +23,42 @@ interface MyTicket {
   status: string;
   stage: string;
   currentApprover: string;
+  amlResult?: string;
+  amlComment?: string;
+  rpResult?: string;
+  rpComment?: string;
+  relations?: RelationSummary[];
+  attachmentWarnings?: AttachmentWarning[];
   formData?: any;
   logs?: AuditLog[]; // We will load logs lazily
+}
+
+interface TicketBasic {
+  id: string;
+  createdAt: string;
+  applicantName: string;
+  dept: string;
+  formType: string;
+  status: string;
+  subject: string;
+}
+
+interface RelationSummary {
+  id: string;
+  sourceTicketId: string;
+  targetTicketId: string;
+  relationType?: string;
+  note?: string;
+  direction: 'source' | 'target';
+  linkedTicket?: TicketBasic | null;
+}
+
+interface AttachmentWarning {
+  id?: string;
+  fieldKey: string;
+  url: string;
+  versionNote?: string;
+  warning?: string;
 }
 
 const hiddenFormFields = new Set(['ALWAYS', 'expense_category']);
@@ -43,8 +77,14 @@ const displayStatus = (status: string) => {
 const displayAuditAction = (action: string) => {
   if (action === 'Submitted') return '送出申請';
   if (action === 'Completed' || action === 'Approved') return '完成結案';
+  if (action === 'Resubmitted') return '重新送出';
   if (action === 'Rejected') return '退回補件';
   return action || '系統紀錄';
+};
+
+const displayCheckValue = (value?: string) => {
+  const text = String(value || '').trim();
+  return text || '尚無資料';
 };
 
 const deriveTicketStateFromLogs = (logs: AuditLog[]) => {
@@ -70,6 +110,9 @@ function matchesTicketSearch(ticket: MyTicket, query: string) {
     ticket.subject,
     ticket.amount,
     ticket.status,
+    ticket.amlResult,
+    ticket.rpResult,
+    ...(ticket.relations || []).map((relation) => `${relation.id} ${relation.sourceTicketId} ${relation.targetTicketId} ${relation.linkedTicket?.subject || ''}`),
     ...Object.values(ticket.formData || {}).map((value) => String(value ?? '')),
   ].join(' ').toLowerCase();
 
@@ -402,6 +445,27 @@ export default function TrackDashboard({ user }: { user: any }) {
                       </span>
                     )}
                   </h4>
+
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {ticket.relations && ticket.relations.length > 0 && (
+                      <span className="inline-flex items-center gap-1.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg px-2.5 py-1 font-semibold">
+                        <Link2 className="w-3.5 h-3.5" />
+                        關聯 {ticket.relations.length} 筆
+                      </span>
+                    )}
+                    {(ticket.amlResult || ticket.rpResult) && (
+                      <span className="inline-flex items-center gap-1.5 bg-sky-50 text-sky-700 border border-sky-100 rounded-lg px-2.5 py-1 font-semibold">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        AML {displayCheckValue(ticket.amlResult)} / 關係人 {displayCheckValue(ticket.rpResult)}
+                      </span>
+                    )}
+                    {ticket.attachmentWarnings && ticket.attachmentWarnings.length > 0 && (
+                      <span className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-lg px-2.5 py-1 font-semibold">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        附件警示 {ticket.attachmentWarnings.length} 筆
+                      </span>
+                    )}
+                  </div>
                 </div>
   
                 {/* Status Section */}
@@ -414,6 +478,66 @@ export default function TrackDashboard({ user }: { user: any }) {
               {/* Logs Expanded View */}
               {expandedTicketId === ticket.id && (
                 <div className="border-t border-slate-100 bg-slate-50 p-6 animate-slide-up">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                      <h5 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <Link2 className="w-4 h-4 text-indigo-500" />
+                        關聯單號
+                      </h5>
+                      {ticket.relations && ticket.relations.length > 0 ? (
+                        <div className="space-y-2">
+                          {ticket.relations.map((relation) => (
+                            <div key={relation.id} className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 text-sm">
+                              <div className="flex flex-wrap items-center gap-2 font-semibold text-indigo-800">
+                                <span className="font-mono">{relation.linkedTicket?.id || (relation.direction === 'source' ? relation.targetTicketId : relation.sourceTicketId)}</span>
+                                <span className="text-xs bg-white/80 border border-indigo-100 rounded px-2 py-0.5">
+                                  {relation.linkedTicket?.formType || '-'}
+                                </span>
+                                <span className="text-xs text-indigo-500">{relation.direction === 'source' ? '本單衍生' : '來源依據'}</span>
+                              </div>
+                              <p className="mt-1 text-slate-700">{relation.linkedTicket?.subject || '(尚無主旨資料)'}</p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                狀態：{displayStatus(relation.linkedTicket?.status || '')} / 申請人：{relation.linkedTicket?.applicantName || '-'} / 部門：{relation.linkedTicket?.dept || '-'}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">目前沒有關聯單號。</p>
+                      )}
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+                      <h5 className="font-bold text-slate-700 mb-3 flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-sky-500" />
+                        AML / 關係人調查
+                      </h5>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                        <div className="rounded-lg bg-sky-50 border border-sky-100 p-3">
+                          <p className="text-xs font-bold text-sky-600 mb-1">AML 結果</p>
+                          <p className="font-semibold text-slate-800">{displayCheckValue(ticket.amlResult)}</p>
+                        </div>
+                        <div className="rounded-lg bg-sky-50 border border-sky-100 p-3">
+                          <p className="text-xs font-bold text-sky-600 mb-1">關係人結果</p>
+                          <p className="font-semibold text-slate-800">{displayCheckValue(ticket.rpResult)}</p>
+                        </div>
+                      </div>
+                      {ticket.attachmentWarnings && ticket.attachmentWarnings.length > 0 && (
+                        <div className="mt-4 rounded-lg bg-amber-50 border border-amber-100 p-3 text-sm text-amber-800">
+                          <p className="font-bold mb-2 flex items-center gap-1.5">
+                            <AlertTriangle className="w-4 h-4" />
+                            附件警示
+                          </p>
+                          <ul className="space-y-1 list-disc pl-5">
+                            {ticket.attachmentWarnings.map((item, index) => (
+                              <li key={`${item.fieldKey}-${index}`}>{item.warning || '請確認附件權限或網址'}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
                   <h5 className="font-bold text-slate-700 mb-4 flex items-center gap-2">
                     <ListFilter className="w-4 h-4 text-slate-400"/>
                     處理紀錄 (Audit Logs)

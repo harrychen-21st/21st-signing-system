@@ -57,6 +57,79 @@ const parseJsonCell = (value: any) => {
   }
 };
 
+const buildHeaderIndex = (headers: any[]) =>
+  headers.reduce((index: Record<string, number>, header, columnIndex) => {
+    index[String(header || '').trim()] = columnIndex;
+    return index;
+  }, {});
+
+const readCell = (row: any[], index: Record<string, number>, header: string, fallbackIndex: number) => {
+  const columnIndex = index[header];
+  return row[columnIndex ?? fallbackIndex] ?? '';
+};
+
+const parseTaipeiDateMs = (value: any) => {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  const text = String(value).trim();
+  const taipeiMatch = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (taipeiMatch) {
+    const [, year, month, day, hour, minute, second = '0'] = taipeiMatch;
+    return new Date(
+      `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hour.padStart(2, '0')}:${minute}:${second.padStart(2, '0')}+08:00`
+    ).getTime();
+  }
+  const parsed = new Date(text).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const fetchJson = async (url: string, options: RequestInit = {}) => {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Apps Script returned invalid JSON: ${text.substring(0, 160)}`);
+  }
+  if (!response.ok) {
+    throw new Error(data?.error || `Apps Script returned status: ${response.status}`);
+  }
+  return data;
+};
+
+const getSheetRows = async (scriptUrl: string, sheet: string, ttlMs = 20_000): Promise<SheetRows> => {
+  const cacheKey = `${scriptUrl}|${sheet}`;
+  const cached = sheetCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+
+  const data = await fetchJson(`${scriptUrl}?action=getData&sheet=${encodeURIComponent(sheet)}`);
+  if (data.success === false) {
+    if (String(data.error || '').includes('Sheet not found')) return [];
+    throw new Error(data.error || `Failed to fetch sheet: ${sheet}`);
+  }
+
+  const rows = Array.isArray(data.data) ? data.data : [];
+  sheetCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, rows });
+  return rows;
+};
+
+const getOptionalSheetRows = async (scriptUrl: string, sheet: string, headers: string[] = []) => {
+  try {
+    const rows = await getSheetRows(scriptUrl, sheet);
+    return rows.length ? rows : (headers.length ? [headers] : []);
+  } catch (error: any) {
+    if (String(error?.message || '').includes('Sheet not found')) {
+      return headers.length ? [headers] : [];
+    }
+    throw error;
+  }
+};
+
+const invalidateSheetCache = (scriptUrl: string, sheets: string[]) => {
+  sheets.forEach((sheet) => sheetCache.delete(`${scriptUrl}|${sheet}`));
+};
+
 const extractDeptCode = (department = '') => {
   const match = String(department).trim().match(/^[A-Za-z0-9]+/);
   return (match?.[0] || 'XX').toUpperCase();
@@ -90,8 +163,86 @@ const defaultFormTypes = [
   { id: 'CS', name: '用印申請單 (CS)' }
 ];
 
+const ticketHeaders = [
+  'TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType',
+  'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML',
+  'FormData_JSON', 'CurrentApprover', 'AML_Result', 'AML_Comment', 'RP_Result',
+  'RP_Comment', 'AML_LastSyncedAt'
+];
+const ticketRelationHeaders = [
+  'RelationID', 'SourceTicketID', 'TargetTicketID', 'RelationType', 'Note',
+  'CreatedBy', 'CreatedAt', 'SourceField', 'Status'
+];
+const attachmentCheckHeaders = [
+  'AttachmentID', 'TicketID', 'FieldKey', 'Url', 'VersionNote', 'CheckStatus',
+  'Warning', 'CheckedAt'
+];
 const meetingRoomHeaders = ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt'];
 const meetingBookingHeaders = ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt'];
+
+type SheetRows = any[][];
+
+type TicketRecord = {
+  id: string;
+  createdAt: string;
+  applicantEmail: string;
+  applicantName: string;
+  dept: string;
+  formType: string;
+  status: string;
+  stage: string;
+  subject: string;
+  amount: string;
+  formData: Record<string, any>;
+  currentApprover: string;
+  amlResult: string;
+  amlComment: string;
+  rpResult: string;
+  rpComment: string;
+  amlLastSyncedAt: string;
+  relations?: RelationSummary[];
+  attachmentWarnings?: AttachmentWarning[];
+};
+
+type RelationRow = {
+  id: string;
+  sourceTicketId: string;
+  targetTicketId: string;
+  relationType: string;
+  note: string;
+  createdBy: string;
+  createdAt: string;
+  sourceField: string;
+  status: string;
+};
+
+type RelationSummary = RelationRow & {
+  direction: 'source' | 'target';
+  linkedTicket: TicketBasic | null;
+};
+
+type TicketBasic = {
+  id: string;
+  createdAt: string;
+  applicantName: string;
+  dept: string;
+  formType: string;
+  status: string;
+  subject: string;
+};
+
+type AttachmentWarning = {
+  id: string;
+  ticketId: string;
+  fieldKey: string;
+  url: string;
+  versionNote: string;
+  checkStatus: string;
+  warning: string;
+  checkedAt: string;
+};
+
+const sheetCache = new Map<string, { expiresAt: number; rows: SheetRows }>();
 
 const isAdminUser = (user?: { roles?: string[] }) => user?.roles?.includes('ROLE:ADMIN');
 
@@ -112,14 +263,14 @@ const isSameUserOrAdmin = (requestedEmail: string, user?: { email?: string; role
   isAdminUser(user) || String(user?.email || '').toLowerCase() === String(requestedEmail || '').toLowerCase();
 
 const allowedGeneratedFieldTypes = new Set(['text', 'number', 'date', 'select', 'textarea']);
-const allowedGeneratedApproverTypes = new Set(['MANAGER', 'ROLE', 'SPECIAL:AML_CHECK', 'DEPT']);
+const allowedGeneratedRuleOps = new Set(['ALWAYS', '==', '!=', '>', '>=', '<', '<=', 'IN', 'CONTAINS']);
 
 const normalizeGeneratedFormId = (value: string) => String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
 
-const normalizeGeneratedApproverType = (value: any) => {
-  const normalized = String(value || 'ROLE').trim().toUpperCase();
-  if (normalized === 'HIERARCHY') return 'MANAGER';
-  return allowedGeneratedApproverTypes.has(normalized) ? normalized : 'ROLE';
+const normalizeGeneratedHandlingRole = (value: any) => {
+  const normalized = String(value || 'ROLE:ADMIN').trim();
+  if (!normalized) return 'ROLE:ADMIN';
+  return normalized.toUpperCase().startsWith('ROLE:') ? normalized.toUpperCase() : normalized;
 };
 
 const normalizeGeneratedFields = (fields: any[] = []) => {
@@ -145,12 +296,15 @@ const normalizeGeneratedFields = (fields: any[] = []) => {
 const normalizeGeneratedRules = (rules: any[] = []) => {
   return rules.map((rule, index) => ({
     id: String(rule?.id || `rule-${Date.now()}-${index}`),
-    stage: Number(rule?.stage || index + 1),
-    conditionField: String(rule?.conditionField || 'ALWAYS'),
-    conditionOp: String(rule?.conditionOp || '=='),
-    conditionVal: String(rule?.conditionVal || 'TRUE'),
-    approverType: normalizeGeneratedApproverType(rule?.approverType),
-    approverValue: String(rule?.approverValue || 'ROLE:ADMIN')
+    ruleName: String(rule?.ruleName || rule?.name || `後台處理規則 ${index + 1}`),
+    triggerField: String(rule?.triggerField || rule?.conditionField || 'ALWAYS'),
+    triggerOp: allowedGeneratedRuleOps.has(String(rule?.triggerOp || rule?.conditionOp || 'ALWAYS').toUpperCase())
+      ? String(rule?.triggerOp || rule?.conditionOp || 'ALWAYS').toUpperCase()
+      : 'ALWAYS',
+    triggerValue: String(rule?.triggerValue || rule?.conditionVal || ''),
+    handlingRole: normalizeGeneratedHandlingRole(rule?.handlingRole || rule?.approverValue || 'ROLE:ADMIN'),
+    handlingNote: String(rule?.handlingNote || rule?.note || ''),
+    isActive: rule?.isActive === false ? 'FALSE' : 'TRUE'
   }));
 };
 
@@ -159,6 +313,286 @@ const rowToObject = (headers: string[], row: any[]) =>
     record[header] = row[index] ?? '';
     return record;
   }, {});
+
+const mapTicketRow = (headers: any[], row: any[]): TicketRecord => {
+  const index = buildHeaderIndex(headers.length ? headers : ticketHeaders);
+  const status = String(readCell(row, index, 'Status', 6) || '');
+  const isCompleted = status === 'Completed' || status === 'Approved';
+  return {
+    id: String(readCell(row, index, 'TicketID', 0) || ''),
+    createdAt: String(readCell(row, index, 'CreatedAt', 1) || ''),
+    applicantEmail: String(readCell(row, index, 'ApplicantEmail', 2) || ''),
+    applicantName: String(readCell(row, index, 'ApplicantName', 3) || ''),
+    dept: String(readCell(row, index, 'Department', 4) || ''),
+    formType: String(readCell(row, index, 'FormType', 5) || ''),
+    status,
+    stage: isCompleted ? 'END' : String(readCell(row, index, 'CurrentStage', 7) || ''),
+    subject: String(readCell(row, index, 'Subject', 9) || ''),
+    amount: String(readCell(row, index, 'Amount', 10) || ''),
+    formData: parseJsonCell(readCell(row, index, 'FormData_JSON', 12)),
+    currentApprover: isCompleted ? '' : String(readCell(row, index, 'CurrentApprover', 13) || ''),
+    amlResult: String(readCell(row, index, 'AML_Result', 14) || ''),
+    amlComment: String(readCell(row, index, 'AML_Comment', 15) || ''),
+    rpResult: String(readCell(row, index, 'RP_Result', 16) || ''),
+    rpComment: String(readCell(row, index, 'RP_Comment', 17) || ''),
+    amlLastSyncedAt: String(readCell(row, index, 'AML_LastSyncedAt', 18) || '')
+  };
+};
+
+const toTicketBasic = (ticket: TicketRecord): TicketBasic => ({
+  id: ticket.id,
+  createdAt: ticket.createdAt,
+  applicantName: ticket.applicantName,
+  dept: ticket.dept,
+  formType: ticket.formType,
+  status: ticket.status,
+  subject: ticket.subject
+});
+
+const mapRelationRow = (headers: any[], row: any[]): RelationRow => {
+  const index = buildHeaderIndex(headers.length ? headers : ticketRelationHeaders);
+  return {
+    id: String(readCell(row, index, 'RelationID', 0) || ''),
+    sourceTicketId: String(readCell(row, index, 'SourceTicketID', 1) || ''),
+    targetTicketId: String(readCell(row, index, 'TargetTicketID', 2) || ''),
+    relationType: String(readCell(row, index, 'RelationType', 3) || ''),
+    note: String(readCell(row, index, 'Note', 4) || ''),
+    createdBy: String(readCell(row, index, 'CreatedBy', 5) || ''),
+    createdAt: String(readCell(row, index, 'CreatedAt', 6) || ''),
+    sourceField: String(readCell(row, index, 'SourceField', 7) || ''),
+    status: String(readCell(row, index, 'Status', 8) || 'Active')
+  };
+};
+
+const mapAttachmentRow = (headers: any[], row: any[]): AttachmentWarning => {
+  const index = buildHeaderIndex(headers.length ? headers : attachmentCheckHeaders);
+  return {
+    id: String(readCell(row, index, 'AttachmentID', 0) || ''),
+    ticketId: String(readCell(row, index, 'TicketID', 1) || ''),
+    fieldKey: String(readCell(row, index, 'FieldKey', 2) || ''),
+    url: String(readCell(row, index, 'Url', 3) || ''),
+    versionNote: String(readCell(row, index, 'VersionNote', 4) || ''),
+    checkStatus: String(readCell(row, index, 'CheckStatus', 5) || ''),
+    warning: String(readCell(row, index, 'Warning', 6) || ''),
+    checkedAt: String(readCell(row, index, 'CheckedAt', 7) || '')
+  };
+};
+
+const parseTicketRows = (rows: SheetRows) => {
+  const headers = rows[0] || ticketHeaders;
+  return rows.slice(1).map((row) => mapTicketRow(headers, row)).filter((ticket) => ticket.id);
+};
+
+const parseRelationRows = (rows: SheetRows) => {
+  const headers = rows[0] || ticketRelationHeaders;
+  return rows.slice(1)
+    .map((row) => mapRelationRow(headers, row))
+    .filter((relation) => relation.id && relation.sourceTicketId && relation.targetTicketId && relation.status !== 'Deleted');
+};
+
+const parseAttachmentRows = (rows: SheetRows) => {
+  const headers = rows[0] || attachmentCheckHeaders;
+  return rows.slice(1)
+    .map((row) => mapAttachmentRow(headers, row))
+    .filter((item) => item.id && item.ticketId);
+};
+
+const buildTicketContext = (
+  tickets: TicketRecord[],
+  relations: RelationRow[],
+  attachments: AttachmentWarning[]
+) => {
+  const ticketById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+  const relationMap = new Map<string, RelationSummary[]>();
+  const attachmentMap = new Map<string, AttachmentWarning[]>();
+
+  relations.forEach((relation) => {
+    const sourceSummary: RelationSummary = {
+      ...relation,
+      direction: 'source',
+      linkedTicket: ticketById.has(relation.targetTicketId) ? toTicketBasic(ticketById.get(relation.targetTicketId)!) : null
+    };
+    const targetSummary: RelationSummary = {
+      ...relation,
+      direction: 'target',
+      linkedTicket: ticketById.has(relation.sourceTicketId) ? toTicketBasic(ticketById.get(relation.sourceTicketId)!) : null
+    };
+    relationMap.set(relation.sourceTicketId, [...(relationMap.get(relation.sourceTicketId) || []), sourceSummary]);
+    relationMap.set(relation.targetTicketId, [...(relationMap.get(relation.targetTicketId) || []), targetSummary]);
+  });
+
+  attachments
+    .filter((item) => item.checkStatus === 'Warning' || item.warning)
+    .forEach((item) => {
+      attachmentMap.set(item.ticketId, [...(attachmentMap.get(item.ticketId) || []), item]);
+    });
+
+  return { ticketById, relationMap, attachmentMap };
+};
+
+const enrichTickets = (
+  tickets: TicketRecord[],
+  relationMap: Map<string, RelationSummary[]>,
+  attachmentMap: Map<string, AttachmentWarning[]>
+) => tickets.map((ticket) => ({
+  ...ticket,
+  relations: relationMap.get(ticket.id) || [],
+  attachmentWarnings: attachmentMap.get(ticket.id) || []
+}));
+
+const isLikelyAttachmentField = (key: string, value: unknown) => {
+  const field = key.toLowerCase();
+  const text = String(value || '').trim();
+  return Boolean(text) && (
+    field.includes('attachment') ||
+    field.includes('file') ||
+    field.includes('document') ||
+    /^https?:\/\//i.test(text)
+  );
+};
+
+const timeoutSignal = (timeoutMs: number) => {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+};
+
+const checkAttachmentUrl = async (url: string) => {
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return {
+      checkStatus: 'Warning',
+      warning: '附件欄位不是 http/https 網址，請確認共用路徑可供查核。'
+    };
+  }
+
+  try {
+    let response = await fetch(trimmed, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: timeoutSignal(4_000)
+    });
+    if (response.status === 405 || response.status === 403) {
+      response = await fetch(trimmed, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: timeoutSignal(4_000)
+      });
+    }
+    if (response.status >= 400) {
+      return {
+        checkStatus: 'Warning',
+        warning: `附件連結檢查回應 ${response.status}，請確認權限或網址。`
+      };
+    }
+    return { checkStatus: 'OK', warning: '' };
+  } catch (error: any) {
+    return {
+      checkStatus: 'Warning',
+      warning: `附件連結無法完成檢查，請確認權限或網址。${error?.name === 'AbortError' ? '（逾時）' : ''}`
+    };
+  }
+};
+
+const buildAttachmentChecks = async (formData: Record<string, unknown>) => {
+  const entries = Object.entries(formData || {}).filter(([key, value]) => isLikelyAttachmentField(key, value));
+  const versionNote = String(formData.attachment_version_note || formData.version_note || '').trim();
+
+  return Promise.all(entries.map(async ([fieldKey, rawValue], index) => {
+    const url = String(rawValue || '').trim();
+    const check = await checkAttachmentUrl(url);
+    return {
+      attachmentId: `ATT-${Date.now()}-${index + 1}`,
+      fieldKey,
+      url,
+      versionNote,
+      checkStatus: check.checkStatus,
+      warning: check.warning,
+      checkedAt: new Date().toISOString()
+    };
+  }));
+};
+
+const normalizeRpDisplay = (value: string) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.includes('已過關係人會議')) return '已過關係人';
+  return text;
+};
+
+const escapeXml = (value: unknown) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+const worksheetXml = (name: string, headers: string[], rows: unknown[][]) => {
+  const headerXml = headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(header)}</Data></Cell>`).join('');
+  const rowsXml = rows.map((row) => (
+    `<Row>${headers.map((_, index) => `<Cell><Data ss:Type="String">${escapeXml(row[index])}</Data></Cell>`).join('')}</Row>`
+  )).join('');
+  return `<Worksheet ss:Name="${escapeXml(name)}"><Table><Row>${headerXml}</Row>${rowsXml}</Table></Worksheet>`;
+};
+
+const buildExcelWorkbook = (sheets: { name: string; headers: string[]; rows: unknown[][] }[]) => {
+  const worksheets = sheets.map((sheet) => worksheetXml(sheet.name, sheet.headers, sheet.rows)).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:x="urn:schemas-microsoft-com:office:excel"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+${worksheets}
+</Workbook>`;
+};
+
+const matchesAuditFilters = (ticket: TicketRecord, query: Record<string, any>, relations: RelationSummary[] = []) => {
+  const search = String(query.search || '').trim().toLowerCase();
+  const dept = String(query.dept || '').trim().toLowerCase();
+  const formType = String(query.formType || '').trim().toLowerCase();
+  const status = String(query.status || '').trim().toLowerCase();
+  const taxId = String(query.taxId || '').trim().toLowerCase();
+  const relationId = String(query.relationId || '').trim().toLowerCase();
+  const dateFrom = String(query.dateFrom || '').trim();
+  const dateTo = String(query.dateTo || '').trim();
+  const createdAtMs = parseTaipeiDateMs(ticket.createdAt);
+
+  if (dept && !ticket.dept.toLowerCase().includes(dept)) return false;
+  if (formType && ticket.formType.toLowerCase() !== formType) return false;
+  if (status && ticket.status.toLowerCase() !== status) return false;
+  if (taxId && !String(ticket.formData?.ext_tax_id || '').toLowerCase().includes(taxId)) return false;
+  if (dateFrom && createdAtMs < new Date(`${dateFrom}T00:00:00+08:00`).getTime()) return false;
+  if (dateTo && createdAtMs > new Date(`${dateTo}T23:59:59+08:00`).getTime()) return false;
+  if (relationId) {
+    const relationText = relations.map((relation) => [
+      relation.id,
+      relation.sourceTicketId,
+      relation.targetTicketId,
+      relation.linkedTicket?.id || ''
+    ].join(' ')).join(' ').toLowerCase();
+    if (!relationText.includes(relationId)) return false;
+  }
+
+  if (!search) return true;
+  const searchableText = [
+    ticket.id,
+    ticket.createdAt,
+    ticket.applicantEmail,
+    ticket.applicantName,
+    ticket.dept,
+    ticket.formType,
+    ticket.status,
+    ticket.subject,
+    ticket.amount,
+    ticket.amlResult,
+    ticket.rpResult,
+    ...Object.values(ticket.formData || {}).map((value) => String(value ?? '')),
+    ...relations.map((relation) => `${relation.id} ${relation.sourceTicketId} ${relation.targetTicketId} ${relation.linkedTicket?.subject || ''}`)
+  ].join(' ').toLowerCase();
+
+  return searchableText.includes(search);
+};
 
 const normalizeDateCell = (value: any) => {
   if (!value) return '';
@@ -516,7 +950,7 @@ export async function createApp() {
 
 請嚴格回傳 JSON，內容必須包含：
 1. fields: 欄位陣列，每個欄位包含 id、label、type、options、required。
-2. rules: 後台處理提示規則陣列，每筆包含 stage、conditionField、conditionOp、conditionVal、approverType、approverValue。若沒有特殊後台角色，請給一筆 ROLE:ADMIN。
+2. rules: 後台處理提示規則陣列，每筆包含 ruleName、triggerField、triggerOp、triggerValue、handlingRole、handlingNote、isActive。若沒有特殊後台角色，請給一筆 handlingRole 為 ROLE:ADMIN 的提醒規則。
 3. fieldsMarkdown: 給管理員看的 Markdown 欄位清單說明。
 4. logicMarkdown: 給管理員看的 Markdown 後台處理流程說明。`;
 
@@ -546,12 +980,13 @@ export async function createApp() {
                 items: {
                   type: Type.OBJECT,
                   properties: {
-                    stage: { type: Type.NUMBER },
-                    conditionField: { type: Type.STRING },
-                    conditionOp: { type: Type.STRING },
-                    conditionVal: { type: Type.STRING },
-                    approverType: { type: Type.STRING },
-                    approverValue: { type: Type.STRING }
+                    ruleName: { type: Type.STRING },
+                    triggerField: { type: Type.STRING },
+                    triggerOp: { type: Type.STRING },
+                    triggerValue: { type: Type.STRING },
+                    handlingRole: { type: Type.STRING },
+                    handlingNote: { type: Type.STRING },
+                    isActive: { type: Type.BOOLEAN }
                   }
                 }
               },
@@ -627,47 +1062,49 @@ export async function createApp() {
         formId: 'AP',
         fieldsMarkdown: `# 簽呈單 (AP) 欄位設計
 
-本表單用於一般事務之簽核與核定，支援涉及外部合作廠商時之動態欄位擴充與 AML/公司資訊自動帶入。
+本表單用於一般內部申請與簽呈紀錄，支援涉及外部合作廠商時之動態欄位擴充、公司資訊帶入與 AML/關係人調查勾稽。
 
 | 欄位 ID | 欄位名稱 | 欄位型態 | 必填 | 說明/動態顯示條件 |
 | :--- | :--- | :--- | :--- | :--- |
+| **related_ticket** | 相關單號 | 單行文字 | 否 | 若本申請延續或補充既有單號，請填入來源單號以利勾稽 |
 | **subject** | 主旨 | 單行文字 | 是 | 請簡述簽呈之主旨與主要目的 |
 | **description** | 內容說明 | 多行文字 | 是 | 詳細說明本簽呈之原因、內容與背景 |
 | **attachment** | 附件上傳 | 單行文字 | 否 | 請貼上相關雲端連結或資料夾路徑 |
+| **attachment_version_note** | 附件版本/補充說明 | 單行文字 | 否 | 若附件有多版，請補充版本或差異說明 |
 | **external_collab** | 是否涉及外部合作廠商 | 下拉選單 | 是 | 可選擇「是」或「否」 |
 | **ext_tax_id** | 統一編號/識別碼 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，輸入後自動帶入廠商與負責人資料 |
 | **ext_company_name** | 廠商名稱/公司名稱 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |
 | **ext_company_owner** | 負責人姓名 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |`,
-        logicMarkdown: `# 簽呈單 (AP) 簽核邏輯矩陣
+        logicMarkdown: `# 簽呈單 (AP) 後台處理規則
 
-根據簽件屬性，系統將自動分派至對應的簽核層級。本表單支援動態 AML 調查關卡。
+系統負責產生單號、保存申請紀錄、建立關聯線索，並在涉及外部合作廠商時建立 AML/關係人調查資料。
 
 \`\`\`mermaid
 graph TD
-    Start([1. 申請人送出]) --> Stage1[2. 直屬主管簽核]
-    Stage1 --> Stage2[3. 本部部長簽核]
-    Stage2 --> Cond{涉及外部合作廠商?}
-    Cond -- 是 (且需進行 AML 調查) --> Stage3[4. AML調查與法遵審查]
-    Cond -- 否 --> Stage4[5. 行政副總核決]
-    Stage3 --> Stage4
-    Stage4 --> Stage5[6. 總經理終審]
-    Stage5 --> End([簽核完成並歸檔])
+    Start([申請人送出]) --> Ticket[系統產生 AP 單號]
+    Ticket --> Audit[寫入 Tickets 與 AuditLogs]
+    Audit --> Cond{涉及外部合作廠商?}
+    Cond -- 是 --> AML[建立 AML/關係人調查資料]
+    Cond -- 否 --> Backoffice[後台處理與追蹤]
+    AML --> Backoffice
+    Backoffice --> Done[完成結案並保留稽核軌跡]
 \`\`\`
 
-### 簽核關卡明細
+### 後台處理重點
 
-| 關卡 | 簽核角色 | 觸發條件 | 說明 |
-| :--- | :--- | :--- | :--- |
-| **第 1 關** | 直屬主管 (MANAGER) | 無條件 | 申請人之直接匯報主管第一階段審查 |
-| **第 2 關** | 部門經理/部長 (DEPT_HEAD) | 無條件 | 部門一級主管之複審與核可 |
-| **第 3 關** | AML 調查與法遵審查 (SPECIAL:AML_CHECK / ADMIN_DIRECTOR) | **external_collab == '是'** | 外部廠商統一編號自動觸發 AML/黑名單比對與法遵主管簽核 |
-| **第 4 關** | 行政副總 (ADMIN_VP) | 無條件 | 管理本部最高主管審查 |
-| **第 5 關** | 總經理 (GM) | 無條件 | 終審與最高核決 |`,
+| 項目 | 觸發條件 | 處理重點 |
+| :--- | :--- | :--- |
+| 單號紀錄 | 送出表單 | 產生 AP 單號並保存申請內容 |
+| AML/關係人調查 | external_collab == '是' | 同步 AML 調查資料並回寫查核結果 |
+| 單號勾稽 | 申請內容帶有相關單號 | 建立 TicketRelations，供後續查詢與稽核包匯出 |
+| 附件檢查 | 附件欄位有值 | 記錄附件版本說明與連結檢查警示 |`,
         configJSON: {
           fields: [
+            { id: "related_ticket", label: "相關單號 (選填)", type: "text", required: false },
             { id: "subject", label: "主旨", type: "text", required: true },
             { id: "description", label: "內容說明", type: "textarea", required: true },
             { id: "attachment", label: "附件上傳 (請貼上雲端連結)", type: "text", required: false },
+            { id: "attachment_version_note", label: "附件版本/補充說明", type: "text", required: false },
             { id: "external_collab", label: "是否涉及外部合作廠商", type: "select", options: ["否", "是"], required: true },
             { id: "ext_tax_id", label: "統一編號/識別碼", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
             { id: "ext_company_name", label: "廠商名稱/公司名稱", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
@@ -693,30 +1130,32 @@ graph TD
 | **payment_date** | 付款期限 | 日期 | 是 | 預計付款之日期 |
 | **payment_method** | 付款方式 | 下拉選單 | 是 | 可選擇「匯款」、「現金」或「已由申請人代墊」 |
 | **description** | 請款用途說明 | 多行文字 | 是 | 詳細說明本次請款之用途與明細 |
-| **attachment** | 檢附單據 | 單行文字 | 是 | 請貼上發票、收據或相關憑證之雲端/共享資料夾連結 |`,
-        logicMarkdown: `# 請款單 (RD) 簽核邏輯矩陣
+| **attachment** | 檢附單據 | 單行文字 | 是 | 請貼上發票、收據或相關憑證之雲端/共享資料夾連結 |
+| **attachment_version_note** | 附件版本/補充說明 | 單行文字 | 否 | 若單據或憑證有多版，請補充版本或差異說明 |`,
+        logicMarkdown: `# 請款單 (RD) 後台處理規則
 
-請款單簽核依據請款金額實施分級授權。金額大於新台幣 5,000 元時將自動加會高階主管。
+請款單用於請款紀錄、來源單號勾稽、附件管控與財務後台處理追蹤。
 
 \`\`\`mermaid
 graph TD
-    Start([1. 申請人送出]) --> Stage1[2. 直屬主管簽核]
-    Stage1 --> Stage2[3. 本部部長簽核]
-    Stage2 --> Cond{請款金額 > 5,000 元?}
-    Cond -- 是 --> Stage3[4. 行政副總審核]
-    Stage3 --> Stage4[5. 總經理核決]
-    Stage4 --> End([簽核完成並撥款])
-    Cond -- 否 --> End
+    Start([申請人送出]) --> Ticket[系統產生 RD 單號]
+    Ticket --> Relation{有填相關單號?}
+    Relation -- 是 --> Link[建立來源單號與 RD 關聯]
+    Relation -- 否 --> Record[保存請款資料]
+    Link --> Record
+    Record --> Attachment[記錄附件與連結警示]
+    Attachment --> Finance[財務/後台處理]
+    Finance --> Done[完成結案並保留稽核軌跡]
 \`\`\`
 
-### 簽核關卡明細
+### 後台處理重點
 
-| 關卡 | 簽核角色 | 觸發條件 | 說明 |
-| :--- | :--- | :--- | :--- |
-| **第 1 關** | 直屬主管 (MANAGER) | 無條件 | 申請人之直屬主管進行初步預算與合理性審查 |
-| **第 2 關** | 部門經理/部長 (DEPT_HEAD) | 無條件 | 部門一級主管之複審與額度確認 |
-| **第 3 關** | 行政副總 (ADMIN_VP) | **amount > 5000** | 金額超過 5,000 元時加會行政副總進行公司級審查 |
-| **第 4 關** | 總經理 (GM) | **amount > 5000** | 金額超過 5,000 元時需經總經理最終核准 |`,
+| 項目 | 觸發條件 | 處理重點 |
+| :--- | :--- | :--- |
+| 單號紀錄 | 送出表單 | 產生 RD 單號並保存請款資料 |
+| 單號勾稽 | related_ticket 有值 | 建立來源單號至本請款單的關聯 |
+| AML/關係人調查 | 涉及外部合作廠商且有統編 | 同步 AML 調查資料並回寫查核結果 |
+| 附件檢查 | 附件欄位有值 | 記錄附件版本說明與連結檢查警示 |`,
         configJSON: {
           fields: [
             { id: "related_ticket", label: "相關單號 (搭配請/採購單號)", type: "text", required: false },
@@ -729,7 +1168,8 @@ graph TD
             { id: "payment_date", label: "付款期限", type: "date", required: true },
             { id: "payment_method", label: "付款方式", type: "select", options: ["匯款", "現金", "已由申請人代墊"], required: true },
             { id: "description", label: "請款用途說明", type: "textarea", required: true },
-            { id: "attachment", label: "檢附單據 (請貼上雲端/資料夾連結)", type: "text", required: true }
+            { id: "attachment", label: "檢附單據 (請貼上雲端/資料夾連結)", type: "text", required: true },
+            { id: "attachment_version_note", label: "附件版本/補充說明", type: "text", required: false }
           ]
         }
       },
@@ -744,44 +1184,39 @@ graph TD
 | **related_ticket** | 相關單號 | 單行文字 | 否 | 搭配請/採購單號或合約單號，便於後續核對 |
 | **seal_type** | 用印類別 | 下拉選單 | 是 | 可選擇：「經濟部章」、「銀行用章」、「法務章」、「發票章」、「合約便章」 |
 | **description** | 用印文件說明 | 多行文字 | 是 | 請詳細說明本次用印之文件名稱、用途與份數 |
-| **attachment** | 用印文件草稿 | 單行文字 | 是 | 請貼上待用印文件草稿之雲端連結以供審核 |`,
-        logicMarkdown: `# 用印申請單 (CS) 簽核邏輯矩陣
+| **attachment** | 用印文件草稿 | 單行文字 | 是 | 請貼上待用印文件草稿之雲端連結 |
+| **attachment_version_note** | 附件版本/補充說明 | 單行文字 | 否 | 若文件草稿有多版，請補充版本或差異說明 |`,
+        logicMarkdown: `# 用印申請單 (CS) 後台處理規則
 
-用印簽核依據印信種類之重要性進行分級簽核。重大印信（非發票章）均需經高階主管與印信管理人核放。
+用印申請單用於用印需求紀錄、來源單號勾稽、附件版本管控與後台結案追蹤。
 
 \`\`\`mermaid
 graph TD
-    Start([1. 申請人送出]) --> CondLegal{是否為合約便章?}
-    CondLegal -- 是 --> StageLegal[2. 法務審查]
-    CondLegal -- 否 --> StageManager[3. 直屬主管簽核]
-    StageLegal --> StageManager
-    StageManager --> StageDept[4. 本部部長簽核]
-    StageDept --> CondBig{是否為發票章?}
-    CondBig -- 否 (經濟部章/銀行用章/法務章/合約便章) --> StageVP[5. 行政副總審核]
-    StageVP --> StageGM[6. 總經理核決]
-    StageGM --> StageBig[7. 大章管理人蓋章]
-    StageBig --> StageSmall[8. 小章管理人蓋章]
-    StageSmall --> End([完成用印並歸檔])
-    CondBig -- 是 (發票章由部門內控直接提早結案) --> End
+    Start([申請人送出]) --> Ticket[系統產生 CS 單號]
+    Ticket --> Relation{有填相關單號?}
+    Relation -- 是 --> Link[建立來源單號與 CS 關聯]
+    Relation -- 否 --> Record[保存用印資料]
+    Link --> Record
+    Record --> Attachment[記錄文件版本與連結警示]
+    Attachment --> Backoffice[後台處理與用印管制]
+    Backoffice --> Done[完成結案並保留稽核軌跡]
 \`\`\`
 
-### 簽核關卡明細
+### 後台處理重點
 
-| 關卡 | 簽核角色 | 觸發條件 | 說明 |
-| :--- | :--- | :--- | :--- |
-| **第 1 關** | 法務處 (ROLE:LEGAL) | **seal_type == '合約便章'** | 合約類文件需由法務處進行合約條款與合規性首簽審查 |
-| **第 2 關** | 直屬主管 (MANAGER) | 無條件 | 申請人之直接主管初步審查用印合理性 |
-| **第 3 關** | 部門經理/部長 (DEPT_HEAD) | 無條件 | 部門一級主管複審 |
-| **第 4 關** | 行政副總 (ADMIN_VP) | **seal_type != '發票章'** | 重大印信用印需經管理本部最高主管核准 |
-| **第 5 關** | 總經理 (GM) | **seal_type != '發票章'** | 重大印信用印需經總經理最終核准 |
-| **第 6 關** | 大章管理人 (ROLE:BIG_SEAL_MGR) | **seal_type != '發票章'** | 大章專責保管人員執行用印操作與登記 |
-| **第 7 關** | 小章管理人 (ROLE:SMALL_SEAL_MGR) | **seal_type != '發票章'** | 小章專責保管人員執行用印操作與登記 |`,
+| 項目 | 觸發條件 | 處理重點 |
+| :--- | :--- | :--- |
+| 單號紀錄 | 送出表單 | 產生 CS 單號並保存用印需求 |
+| 單號勾稽 | related_ticket 有值 | 建立來源單號至本用印申請單的關聯 |
+| 用印管制 | seal_type 有值 | 後台依公司內控程序處理與結案 |
+| 附件檢查 | 附件欄位有值 | 記錄文件版本說明與連結檢查警示 |`,
         configJSON: {
           fields: [
             { id: "related_ticket", label: "相關單號 (搭配請/採購單號)", type: "text", required: false },
             { id: "seal_type", label: "用印類別", type: "select", options: ["經濟部章", "銀行用章", "法務章", "發票章", "合約便章"], required: true },
             { id: "description", label: "用印文件說明", type: "textarea", required: true },
-            { id: "attachment", label: "用印文件草稿 (請貼上雲端連結)", type: "text", required: true }
+            { id: "attachment", label: "用印文件草稿 (請貼上雲端連結)", type: "text", required: true },
+            { id: "attachment_version_note", label: "附件版本/補充說明", type: "text", required: false }
           ]
         }
       }
@@ -811,7 +1246,7 @@ graph TD
       const merged = fetchedDefinitions.map((def: any) => {
         const local = localDefinitions.find(l => l.formId === def.formId);
         if (local) {
-          const forceLocalDefinition = def.formId === 'RD';
+          const forceLocalDefinition = ['AP', 'RD', 'CS'].includes(def.formId);
           return {
             ...def,
             fieldsMarkdown: forceLocalDefinition ? local.fieldsMarkdown : ((def.fieldsMarkdown && def.fieldsMarkdown.trim()) ? def.fieldsMarkdown : local.fieldsMarkdown),
@@ -882,17 +1317,29 @@ graph TD
       const response = await fetch(`${scriptUrl}?action=getRules&formType=${formType}`);
       const data = await response.json();
       const rows = data.data || [];
-      const rules = rows.slice(1).map((r: any) => ({
-        id: r[0],
-        stage: Number(r[2]),
-        conditionField: r[3] || '',
-        conditionOp: r[4] || '',
-        conditionVal: r[5] || '',
-        approverType: normalizeGeneratedApproverType(r[6]),
-        approverValue: r[7] || ''
+      const headers = rows[0] || [];
+      const headerIndex = buildHeaderIndex(headers);
+      const isLegacyWorkflow = headerIndex.Stage != null || headerIndex.ApproverType != null;
+      const rules = rows.slice(1).map((r: any, index: number) => isLegacyWorkflow ? ({
+        id: r[0] || `legacy-${index}`,
+        ruleName: `舊規則第 ${r[2] || index + 1} 筆`,
+        triggerField: r[3] || 'ALWAYS',
+        triggerOp: r[4] || 'ALWAYS',
+        triggerValue: r[5] || '',
+        handlingRole: normalizeGeneratedHandlingRole(r[7] || r[6] || 'ROLE:ADMIN'),
+        handlingNote: '由舊 WorkflowRules 轉換顯示，請儲存後改用新版後台處理規則。',
+        isActive: 'FALSE'
+      }) : ({
+        id: readCell(r, headerIndex, 'RuleID', 0),
+        ruleName: readCell(r, headerIndex, 'RuleName', 2),
+        triggerField: readCell(r, headerIndex, 'TriggerField', 3),
+        triggerOp: readCell(r, headerIndex, 'TriggerOp', 4),
+        triggerValue: readCell(r, headerIndex, 'TriggerValue', 5),
+        handlingRole: normalizeGeneratedHandlingRole(readCell(r, headerIndex, 'HandlingRole', 6)),
+        handlingNote: readCell(r, headerIndex, 'HandlingNote', 7),
+        isActive: readCell(r, headerIndex, 'IsActive', 8) || 'TRUE'
       }));
-      // Sort by stage
-      rules.sort((a: any, b: any) => a.stage - b.stage);
+      rules.sort((a: any, b: any) => String(a.ruleName || '').localeCompare(String(b.ruleName || ''), 'zh-Hant'));
       res.json({ rules });
     } catch (error) {
       console.error("Error fetching rules:", error);
@@ -912,12 +1359,14 @@ graph TD
       const rows = rules.map((r: any) => [
         r.id,
         formType,
-        r.stage,
-        r.conditionField,
-        r.conditionOp,
-        r.conditionVal,
-        r.approverType,
-        r.approverValue
+        r.ruleName || '',
+        r.triggerField || 'ALWAYS',
+        r.triggerOp || 'ALWAYS',
+        r.triggerValue || '',
+        normalizeGeneratedHandlingRole(r.handlingRole),
+        r.handlingNote || '',
+        r.isActive === false || r.isActive === 'FALSE' ? 'FALSE' : 'TRUE',
+        new Date().toISOString()
       ]);
 
       const response = await fetch(scriptUrl, {
@@ -954,6 +1403,7 @@ graph TD
         return res.json({ success: true, generatedIds: [mockId], applicationNumber: mockId, source: 'mock' });
       }
 
+      const attachmentChecks = await buildAttachmentChecks(firstTicket.formData || {});
       const result = await postToAppsScript(scriptUrl, {
         action: 'submitApplication',
         applicantEmail,
@@ -962,106 +1412,23 @@ graph TD
         formType: firstTicket.formType,
         subject: firstTicket.subject || '',
         amount: firstTicket.amount || '',
-        formData: firstTicket.formData || {}
+        formData: firstTicket.formData || {},
+        attachmentChecks
       });
+      invalidateSheetCache(scriptUrl, ['Tickets', 'AuditLogs', 'TicketRelations', 'AttachmentChecks']);
 
       return res.json({
         success: true,
         generatedIds: [result.applicationNumber],
         applicationNumber: result.applicationNumber,
-        amlStatus: result.amlStatus
+        amlStatus: result.amlStatus,
+        attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === 'Warning' || item.warning)
       });
     } catch (error: any) {
       console.error("Error submitting application:", error);
       return res.status(500).json({ error: error.message || "Internal Server Error" });
     }
   });
-
-  // ============================================================================
-  // ruleEngine.js (Dynamic Rule Engine Evaluator)
-  // ============================================================================
-  const evaluateDynamicRules = (rules: any[], currentStage: number, formData: any, formType: string, applicantEmail: string, usersData: any[]): { stage: number | 'END', approver: string } => {
-    
-    // Sort rules by stage
-    const formRules = rules.filter(r => r[1] === formType && Number(r[2]) > currentStage).sort((a, b) => Number(a[2]) - Number(b[2]));
-    
-    if (formRules.length === 0) return { stage: 'END', approver: '' };
-
-    // Group rules by stage
-    const stages = [...new Set(formRules.map(r => Number(r[2])))];
-
-    for (const stage of stages) {
-      const stageRules = formRules.filter(r => Number(r[2]) === stage);
-      
-      for (const rule of stageRules) {
-        const conditionField = rule[3];
-        const conditionOp = rule[4];
-        const conditionVal = rule[5];
-        const approverType = rule[6];
-        const approverValue = rule[7];
-
-        let isMatch = false;
-
-        // Condition Check
-        if (conditionField === 'ALWAYS' && String(conditionOp).toUpperCase() === 'TRUE') {
-          isMatch = true;
-        } else {
-          // Dynamic evaluation
-          let actualVal = formData[conditionField];
-          
-          if (conditionOp === '>') isMatch = Number(actualVal) > Number(conditionVal);
-          else if (conditionOp === '==') isMatch = String(actualVal) === String(conditionVal);
-          else if (conditionOp === 'IN') {
-            const allowed = conditionVal.split(',').map((s:string) => s.trim());
-            isMatch = allowed.includes(actualVal);
-          }
-        }
-
-        if (isMatch) {
-          let assignedApprover = '';
-          const applicantRow = usersData.find(u => u[0]?.toLowerCase() === applicantEmail.toLowerCase());
-          
-          if (approverType === 'MANAGER') {
-            assignedApprover = applicantRow ? applicantRow[3] : ''; // ManagerEmail
-          } else if (approverType === 'ROLE') {
-            assignedApprover = String(approverValue);
-          } else {
-            assignedApprover = String(approverValue); // Direct email fallback
-          }
-
-          // ===== SKIP LOGIC (跳關處理) =====
-          // 1. 若設定為直屬主管，但申請人就是直屬主管自己？ => 那就跳過這關
-          // 2. 若設定找 ROLE:DEPT_HEAD，但申請人剛好擁有 ROLE:DEPT_HEAD？ => 也跳過
-          if (assignedApprover) {
-            let shouldSkip = false;
-            
-            // 如果這關的主管信箱跟申請人信箱完全一樣 (校長兼撞鐘)，跳過
-            if (approverType === 'MANAGER' && assignedApprover.toLowerCase() === applicantEmail.toLowerCase()) {
-              shouldSkip = true;
-            }
-            
-            // 跳過角色：如果我是這個簽核角色 (比如我自己就是部長)，且關卡也是要求這個角色，跳過
-            if (approverType === 'ROLE' && applicantRow) {
-              const myRoles = String(applicantRow[4] || '').split(',').map(s=>s.trim());
-              if (myRoles.includes(assignedApprover)) {
-                shouldSkip = true;
-              }
-            }
-
-            if (shouldSkip) {
-              // 此規則匹配了，但由於跳關規則，我們需要直接嘗試下一個 Stage，所以 Break 當前 Stage 的 Rule Loop
-              break; 
-            }
-          }
-
-          return { stage: Number(stage), approver: assignedApprover };
-        }
-      }
-      // If we looked at all rules for this stage and didn't return, we try the next stage
-    }
-
-    return { stage: 'END', approver: '' };
-  };
 
   // 4.5 Resubmit Ticket
   app.post("/api/tickets/:ticketId/resubmit", authMiddleware, async (req, res): Promise<any> => {
@@ -1079,63 +1446,35 @@ graph TD
     }
 
     try {
-      const [ticketsRes, rulesRes, usersRes] = await Promise.all([
-        fetch(`${scriptUrl}?action=getData&sheet=Tickets`),
-        fetch(`${scriptUrl}?action=getData&sheet=WorkflowRules`),
-        fetch(`${scriptUrl}?action=getData&sheet=Users`)
-      ]);
-      const ticketsData = await ticketsRes.json();
-      const rulesData = await rulesRes.json();
-      const usersData = await usersRes.json();
-      
-      const ticketRow = (ticketsData.data || []).find((r:any) => r[0] === ticketId);
-      if (!ticketRow) throw new Error("Ticket not found");
+      const ticketRows = await getSheetRows(scriptUrl, 'Tickets');
+      const tickets = parseTicketRows(ticketRows);
+      const ticket = tickets.find((item) => item.id === ticketId);
+      if (!ticket) throw new Error("Ticket not found");
 
-      const formType = ticketRow[5];
-      const applicantEmail = String(ticketRow[2] || '').toLowerCase();
+      const applicantEmail = String(ticket.applicantEmail || '').toLowerCase();
       if (!isSameUserOrAdmin(applicantEmail, req.user)) {
         return res.status(403).json({ error: "Forbidden" });
       }
-      if (String(ticketRow[6] || '') !== 'Rejected') {
+      if (String(ticket.status || '') !== 'Rejected') {
         return res.status(400).json({ error: "Only rejected tickets can be resubmitted" });
       }
 
-      // Re-evaluate rules from stage 0
-      const allRules = rulesData.data || [];
-      const allUsers = usersData.data || [];
-      
-      const next = evaluateDynamicRules(allRules, 0, formData, formType, applicantEmail, allUsers);
-      
-      let newStatus = 'Pending';
-      let newStage: string | number = next.stage;
-      let newApprover = next.approver;
-
-      if (next.stage === 'END') {
-        newStatus = 'Approved';
-        newStage = 'END';
-        newApprover = '';
-      }
-
-      const response = await fetch(scriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'resubmitTicket',
-          ticketId,
-          status: newStatus,
-          stage: newStage,
-          nextApprover: newApprover,
-          subject,
-          amount,
-          formData,
-          approverEmail: applicantEmail
-        })
+      const attachmentChecks = await buildAttachmentChecks(formData);
+      const result = await postToAppsScript(scriptUrl, {
+        action: 'resubmitTicket',
+        ticketId,
+        status: 'Submitted',
+        stage: '',
+        nextApprover: '',
+        subject,
+        amount,
+        formData,
+        actorEmail: req.user?.email || applicantEmail,
+        attachmentChecks
       });
-
-      const result = await response.json();
-      if (!result.success) throw new Error(result.error);
+      invalidateSheetCache(scriptUrl, ['Tickets', 'AuditLogs', 'TicketRelations', 'AttachmentChecks']);
       
-      res.json({ success: true, newStatus, newStage, newApprover });
+      res.json({ success: true, newStatus: 'Submitted', newStage: '', newApprover: '', attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === 'Warning' || item.warning), result });
     } catch (error: any) {
       console.error("Error resubmitting ticket:", error);
       res.status(500).json({ error: error.message });
@@ -1162,35 +1501,28 @@ graph TD
     }
 
     try {
-      const ticketsRes = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
-      const ticketsData = await ticketsRes.json();
-      
-      const rows = ticketsData.data || [];
-      
-      const myTickets = rows.slice(1).filter((r: any) => {
-        // C欄 (index 2) 是 ApplicantEmail
-        return r[2]?.toLowerCase() === email;
-      }).map((r: any) => {
-        const status = r[6];
-        const isCompleted = status === 'Completed' || status === 'Approved';
-        return {
-          id: r[0],
-          createdAt: r[1],
-          applicantEmail: r[2],
-          applicantName: r[3],
-          dept: r[4],
-          formType: r[5],
-          status,
-          stage: isCompleted ? 'END' : r[7],
-          subject: r[9],
-          amount: r[10],
-          formData: r[12] ? JSON.parse(r[12]) : {},
-          currentApprover: ''
-        };
+      await postToAppsScript(scriptUrl, { action: 'syncAmlRpResults' }).catch((error) => {
+        console.warn('AML/RP sync skipped before my tickets fetch:', error.message);
       });
+      invalidateSheetCache(scriptUrl, ['Tickets']);
+
+      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+        getSheetRows(scriptUrl, 'Tickets'),
+        getOptionalSheetRows(scriptUrl, 'TicketRelations', ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, 'AttachmentChecks', attachmentCheckHeaders)
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap, attachmentMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      const myTickets = enrichTickets(
+        allTickets.filter((ticket) => ticket.applicantEmail.toLowerCase() === email),
+        relationMap,
+        attachmentMap
+      ).map((ticket) => ({ ...ticket, currentApprover: '', rpResult: normalizeRpDisplay(ticket.rpResult) }));
 
       // Sort by createdAt descending
-      myTickets.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      myTickets.sort((a: any, b: any) => parseTaipeiDateMs(b.createdAt) - parseTaipeiDateMs(a.createdAt));
 
       res.json({ tickets: myTickets });
     } catch (error) {
@@ -1232,23 +1564,23 @@ graph TD
     }
 
     try {
-      const response = await fetch(`${scriptUrl}?action=getData&sheet=Tickets`);
-      const data = await response.json();
-      const rows = data.data || [];
-      const tickets = rows.slice(1).map((row: any[]) => ({
-        id: row[0],
-        createdAt: row[1],
-        applicantEmail: row[2],
-        applicantName: row[3],
-        dept: row[4],
-        formType: row[5],
-        status: row[6],
-        stage: row[6] === 'Completed' || row[6] === 'Approved' ? 'END' : row[7],
-        subject: row[9],
-        amount: row[10],
-        formData: parseJsonCell(row[12]),
-        currentApprover: row[6] === 'Completed' || row[6] === 'Approved' ? '' : row[13] || ''
-      })).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      await postToAppsScript(scriptUrl, { action: 'syncAmlRpResults' }).catch((error) => {
+        console.warn('AML/RP sync skipped before backoffice tickets fetch:', error.message);
+      });
+      invalidateSheetCache(scriptUrl, ['Tickets']);
+
+      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+        getSheetRows(scriptUrl, 'Tickets'),
+        getOptionalSheetRows(scriptUrl, 'TicketRelations', ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, 'AttachmentChecks', attachmentCheckHeaders)
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap, attachmentMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      const tickets = enrichTickets(allTickets, relationMap, attachmentMap)
+        .map((ticket) => ({ ...ticket, rpResult: normalizeRpDisplay(ticket.rpResult) }))
+        .sort((a: any, b: any) => parseTaipeiDateMs(b.createdAt) - parseTaipeiDateMs(a.createdAt));
 
       res.json({ tickets });
     } catch (error: any) {
@@ -1272,10 +1604,156 @@ graph TD
         completedBy: req.user?.email,
         note: req.body?.note || ''
       });
+      invalidateSheetCache(scriptUrl, ['Tickets', 'AuditLogs']);
       res.json(result);
     } catch (error: any) {
       console.error("Error completing ticket:", error);
       res.status(500).json({ error: error.message || "Failed to complete ticket" });
+    }
+  });
+
+  app.get("/api/tickets/:ticketId/relations", authMiddleware, async (req, res): Promise<any> => {
+    const { ticketId } = req.params;
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!scriptUrl || ticketId.startsWith('DEMO-')) {
+      return res.json({ relations: [], source: 'mock' });
+    }
+
+    try {
+      const [ticketRows, relationRows, attachmentRows] = await Promise.all([
+        getSheetRows(scriptUrl, 'Tickets'),
+        getOptionalSheetRows(scriptUrl, 'TicketRelations', ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, 'AttachmentChecks', attachmentCheckHeaders)
+      ]);
+      const allTickets = parseTicketRows(ticketRows);
+      const requestedTicket = allTickets.find((ticket) => ticket.id === ticketId);
+      if (!requestedTicket) return res.status(404).json({ error: "Ticket not found" });
+
+      const ownsTicket = requestedTicket.applicantEmail.toLowerCase() === req.user?.email.toLowerCase();
+      if (!ownsTicket && !canAccessBackoffice(req.user)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      res.json({ relations: relationMap.get(ticketId) || [] });
+    } catch (error: any) {
+      console.error("Error fetching ticket relations:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch ticket relations" });
+    }
+  });
+
+  app.get("/api/backoffice/audit-export", authMiddleware, async (req, res): Promise<any> => {
+    const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL;
+    if (!canAccessBackoffice(req.user)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    if (!scriptUrl) return res.status(503).json({ error: "GAS URL not configured" });
+
+    try {
+      await postToAppsScript(scriptUrl, { action: 'syncAmlRpResults' }).catch((error) => {
+        console.warn('AML/RP sync skipped before audit export:', error.message);
+      });
+      invalidateSheetCache(scriptUrl, ['Tickets']);
+
+      const [ticketRows, logRows, relationRows, attachmentRows, amlResult] = await Promise.all([
+        getSheetRows(scriptUrl, 'Tickets', 5_000),
+        getOptionalSheetRows(scriptUrl, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp']),
+        getOptionalSheetRows(scriptUrl, 'TicketRelations', ticketRelationHeaders),
+        getOptionalSheetRows(scriptUrl, 'AttachmentChecks', attachmentCheckHeaders),
+        fetchJson(`${scriptUrl}?action=getAmlData`).catch(() => ({ success: true, data: [] }))
+      ]);
+
+      const allTickets = parseTicketRows(ticketRows);
+      const allRelations = parseRelationRows(relationRows);
+      const allAttachments = parseAttachmentRows(attachmentRows);
+      const { relationMap } = buildTicketContext(allTickets, allRelations, allAttachments);
+      const tickets = allTickets
+        .filter((ticket) => matchesAuditFilters(ticket, req.query, relationMap.get(ticket.id) || []))
+        .sort((a, b) => parseTaipeiDateMs(b.createdAt) - parseTaipeiDateMs(a.createdAt));
+      const selectedTicketIds = new Set(tickets.map((ticket) => ticket.id));
+
+      const logs = (logRows || []).slice(1).filter((row) => selectedTicketIds.has(String(row[0] || '')));
+      const relations = allRelations.filter((relation) =>
+        selectedTicketIds.has(relation.sourceTicketId) || selectedTicketIds.has(relation.targetTicketId)
+      );
+      const attachments = allAttachments.filter((item) => selectedTicketIds.has(item.ticketId));
+      const amlRows = Array.isArray(amlResult.data) ? amlResult.data : [];
+      const amlHeaders = amlRows[0] || [];
+      const amlIndex = buildHeaderIndex(amlHeaders);
+      const amlTicketIndex = amlIndex['表單編號'] ?? 2;
+      const amlRecords = amlRows.slice(1).filter((row: any[]) => selectedTicketIds.has(String(row[amlTicketIndex] || '')));
+
+      const workbook = buildExcelWorkbook([
+        {
+          name: 'Tickets',
+          headers: ['單號', '建立時間', '申請人', '部門', '表單', '狀態', '主旨', '金額', '統編', '商家', 'AML結果', '關係人結果', '關聯數', '附件警示數'],
+          rows: tickets.map((ticket) => [
+            ticket.id,
+            ticket.createdAt,
+            `${ticket.applicantName} (${ticket.applicantEmail})`,
+            ticket.dept,
+            ticket.formType,
+            ticket.status,
+            ticket.subject,
+            ticket.amount,
+            ticket.formData?.ext_tax_id || '',
+            ticket.formData?.ext_company_name || ticket.formData?.vendor_name || '',
+            ticket.amlResult,
+            normalizeRpDisplay(ticket.rpResult),
+            relationMap.get(ticket.id)?.length || 0,
+            allAttachments.filter((item) => item.ticketId === ticket.id && (item.checkStatus === 'Warning' || item.warning)).length
+          ])
+        },
+        {
+          name: 'AuditLogs',
+          headers: ['單號', '動作', '操作人', '階段', '備註', '時間'],
+          rows: logs.map((row) => [row[0], row[1], row[2], row[3], row[4], row[5]])
+        },
+        {
+          name: 'Relations',
+          headers: ['關聯ID', '來源單號', '目標單號', '關係說明', '備註', '建立人', '建立時間', '來源欄位', '狀態'],
+          rows: relations.map((relation) => [
+            relation.id,
+            relation.sourceTicketId,
+            relation.targetTicketId,
+            relation.relationType,
+            relation.note,
+            relation.createdBy,
+            relation.createdAt,
+            relation.sourceField,
+            relation.status
+          ])
+        },
+        {
+          name: 'AML_RP',
+          headers: amlHeaders.length ? amlHeaders.map(String) : ['無 AML 資料'],
+          rows: amlRecords.length ? amlRecords : []
+        },
+        {
+          name: 'Attachments',
+          headers: ['附件ID', '單號', '欄位', '連結', '版本說明', '檢查狀態', '警示', '檢查時間'],
+          rows: attachments.map((item) => [
+            item.id,
+            item.ticketId,
+            item.fieldKey,
+            item.url,
+            item.versionNote,
+            item.checkStatus,
+            item.warning,
+            item.checkedAt
+          ])
+        }
+      ]);
+
+      const filename = `audit-export-${new Date().toISOString().slice(0, 10)}.xls`;
+      res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.send(workbook);
+    } catch (error: any) {
+      console.error("Error exporting audit package:", error);
+      res.status(500).json({ error: error.message || "Failed to export audit package" });
     }
   });
 

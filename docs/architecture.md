@@ -66,24 +66,29 @@ sequenceDiagram
   participant API as /api/submit-approval
   participant GAS as submitApplication
   participant Tickets as Tickets sheet
+  participant Relations as TicketRelations sheet
+  participant Attachments as AttachmentChecks sheet
   participant AML as AML sheet
   participant Audit as AuditLogs sheet
   participant Mail as Gmail
 
   Client->>API: applicant, form type, subject, amount, formData
+  API->>API: check attachment links and keep warnings
   API->>GAS: action submitApplication
   GAS->>GAS: generateApplicationNumber_
   GAS->>AML: append AML/related-party row when tax ID exists
   GAS->>Tickets: append ticket row
+  GAS->>Relations: append source -> generated ticket links from related_ticket
+  GAS->>Attachments: append attachment check results
   GAS->>Audit: append Submitted log
   GAS->>Mail: email applicant
   GAS-->>API: applicationNumber, amlStatus
-  API-->>Client: generatedIds, applicationNumber, amlStatus
+  API-->>Client: generatedIds, applicationNumber, amlStatus, attachmentWarnings
 ```
 
 Production submission currently uses `submitApplication`, not the older `submitTickets` flow.
 
-## Approval flow
+## Backoffice completion flow
 
 ```mermaid
 flowchart TD
@@ -96,25 +101,19 @@ flowchart TD
 
 The visible UI is currently backoffice completion oriented. Legacy per-stage approval APIs were removed from the Express BFF; `apps-script-latest.js` still contains some historical actions and should be reconciled after confirming the deployed Apps Script source.
 
-## Workflow rule evaluation flow
+## Ticket relation and investigation sync flow
 
 ```mermaid
 flowchart TD
-  A[Current stage and formData] --> B[Filter WorkflowRules by FormType and Stage greater than current]
-  B --> C[Sort stages ascending]
-  C --> D[Evaluate conditions: ALWAYS TRUE, ==, >, IN]
-  D --> E{Matched?}
-  E -- No --> C
-  E -- Yes --> F[Resolve approver: MANAGER, ROLE, or fallback value]
-  F --> G{Skip?}
-  G -- Applicant is own MANAGER --> C
-  G -- Applicant already has ROLE --> C
-  G -- No --> H[Return next stage and approver]
-  C --> I[No more matching stages]
-  I --> J[END]
+  A[New ticket has related_ticket] --> B[Create TicketRelations source -> target]
+  B --> C[Applicant / backoffice query]
+  C --> D[Return linked ticket basic info only]
+  E[AML sheet updated manually] --> F[syncAmlRpResults]
+  F --> G[Write AML_Result and RP_Result to Tickets]
+  G --> H[Applicant and backoffice display latest status]
 ```
 
-`SPECIAL:AML_CHECK` remains part of the workflow-rule vocabulary, but current production submission handles AML by writing investigation rows and setting ticket status rather than by using the removed online approve/reject action endpoint.
+`WorkflowRules` is now treated as a backoffice processing-rule table. If an old per-stage workflow header is found, Apps Script archives it to a `WorkflowRules_Legacy_*` sheet and resets `WorkflowRules` to the new processing-rule headers.
 
 ## Admin configuration flow
 
@@ -123,7 +122,7 @@ flowchart LR
   Admin[ROLE:ADMIN user] --> UI[AdminDashboard]
   UI --> Types[FormTypes APIs]
   UI --> Defs[FormDefinitions APIs]
-  UI --> Rules[WorkflowRules APIs]
+  UI --> Rules[WorkflowRules APIs for processing-rule hints]
   UI --> Notice[SystemSettings NoticeBoard]
   UI --> AI[Gemini form model endpoint]
   Types --> GAS[Apps Script]

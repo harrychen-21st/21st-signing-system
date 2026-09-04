@@ -2,6 +2,24 @@ var SPREADSHEET_ID_PROPERTY_KEY = 'SPREADSHEET_ID';
 var SYSTEM_SENDER_EMAIL = 'auto-reply@21stfintech.com';
 var SYSTEM_SENDER_NAME = '21CD 內部申請系統';
 var TAIPEI_TIME_ZONE = 'Asia/Taipei';
+var TICKET_HEADERS = [
+  'TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType',
+  'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML',
+  'FormData_JSON', 'CurrentApprover', 'AML_Result', 'AML_Comment', 'RP_Result',
+  'RP_Comment', 'AML_LastSyncedAt'
+];
+var TICKET_RELATION_HEADERS = [
+  'RelationID', 'SourceTicketID', 'TargetTicketID', 'RelationType', 'Note',
+  'CreatedBy', 'CreatedAt', 'SourceField', 'Status'
+];
+var ATTACHMENT_CHECK_HEADERS = [
+  'AttachmentID', 'TicketID', 'FieldKey', 'Url', 'VersionNote', 'CheckStatus',
+  'Warning', 'CheckedAt'
+];
+var WORKFLOW_RULE_HEADERS = [
+  'RuleID', 'FormType', 'RuleName', 'TriggerField', 'TriggerOp', 'TriggerValue',
+  'HandlingRole', 'HandlingNote', 'IsActive', 'UpdatedAt'
+];
 
 function formatTaipeiDateTime_(date) {
   return Utilities.formatDate(date || new Date(), TAIPEI_TIME_ZONE, 'yyyy/MM/dd HH:mm:ss');
@@ -55,6 +73,12 @@ function doGet(e) {
       return json_({ success: true, data: sheet.getDataRange().getValues() });
     }
 
+    if (action === 'getAmlData') {
+      var amlSheetId = getSetting_(ss, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
+      var amlSheet = SpreadsheetApp.openById(amlSheetId).getSheets()[0];
+      return json_({ success: true, data: amlSheet.getDataRange().getValues() });
+    }
+
     if (action === 'getFormTypes') {
       var formSheet = ensureSheet_(ss, 'FormTypes', ['FormID', 'FormName']);
       ensureDefaultFormTypes_(formSheet);
@@ -62,8 +86,7 @@ function doGet(e) {
     }
 
     if (action === 'getRules') {
-      var ruleSheet = ss.getSheetByName('WorkflowRules');
-      if (!ruleSheet) return json_({ success: false, error: 'WorkflowRules sheet not found' });
+      var ruleSheet = ensureWorkflowRulesSheet_(ss);
       var rows = ruleSheet.getDataRange().getValues();
       var filtered = [rows[0]];
       for (var i = 1; i < rows.length; i++) {
@@ -113,6 +136,14 @@ function doPost(e) {
 
     if (action === 'completeTicket') {
       return json_({ success: true, ticket: completeTicket_(ss, payload.ticketId, payload.completedBy, payload.note) });
+    }
+
+    if (action === 'resubmitTicket') {
+      return json_({ success: true, ticket: resubmitTicket_(ss, payload) });
+    }
+
+    if (action === 'syncAmlRpResults') {
+      return json_({ success: true, result: syncAmlRpResults_(ss) });
     }
 
     if (action === 'saveData') {
@@ -176,28 +207,39 @@ function submitApplication_(ss, payload) {
     status = amlStatus.needsInvestigation ? 'Checking' : 'Submitted';
   }
 
-  var ticketsSheet = ensureSheet_(ss, 'Tickets', [
-    'TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType',
-    'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML',
-    'FormData_JSON', 'CurrentApprover'
-  ]);
+  var ticketsSheet = ensureTicketsSheet_(ss);
+  var ticketHeaders = ticketsSheet.getDataRange().getValues()[0];
+  ticketsSheet.appendRow(buildRowFromObject_(ticketHeaders, {
+    TicketID: applicationNumber,
+    CreatedAt: formatTaipeiDateTime_(now),
+    ApplicantEmail: payload.applicantEmail || '',
+    ApplicantName: payload.applicantName || '',
+    Department: payload.department || '',
+    FormType: payload.formType || '',
+    Status: status,
+    CurrentStage: '',
+    SLA_Deadline: '',
+    Subject: payload.subject || '',
+    Amount: payload.amount || '',
+    NeedsAML: formData.external_collab === '是' ? 'TRUE' : 'FALSE',
+    FormData_JSON: JSON.stringify(formData),
+    CurrentApprover: '',
+    AML_Result: '',
+    AML_Comment: '',
+    RP_Result: '',
+    RP_Comment: '',
+    AML_LastSyncedAt: ''
+  }));
 
-  ticketsSheet.appendRow([
-    applicationNumber,
-    formatTaipeiDateTime_(now),
-    payload.applicantEmail || '',
-    payload.applicantName || '',
-    payload.department || '',
-    payload.formType || '',
-    status,
-    '',
-    '',
-    payload.subject || '',
-    payload.amount || '',
-    formData.external_collab === '是' ? 'TRUE' : 'FALSE',
-    JSON.stringify(formData),
-    ''
-  ]);
+  createTicketRelations_(ss, {
+    targetTicketId: applicationNumber,
+    relatedTicketValue: formData.related_ticket || formData.relatedTicket || '',
+    relationType: formData.relation_type || '',
+    note: formData.relation_note || '',
+    createdBy: payload.applicantEmail || '',
+    sourceField: 'related_ticket'
+  });
+  recordAttachmentChecks_(ss, applicationNumber, payload.attachmentChecks || []);
 
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp'])
     .appendRow([applicationNumber, 'Submitted', payload.applicantEmail || '', '0', '送出申請', formatTaipeiDateTime_(now)]);
@@ -257,7 +299,7 @@ function saveData_(ss, payload) {
 }
 
 function saveRules_(ss, payload) {
-  var sheet = ensureSheet_(ss, 'WorkflowRules', ['RuleID', 'FormType', 'Stage', 'ConditionField', 'ConditionOp', 'ConditionVal', 'ApproverType', 'ApproverValue']);
+  var sheet = ensureWorkflowRulesSheet_(ss);
   var rows = sheet.getDataRange().getValues();
   for (var i = rows.length - 1; i >= 1; i--) {
     if (rows[i][1] === payload.formType) sheet.deleteRow(i + 1);
@@ -269,24 +311,24 @@ function saveRules_(ss, payload) {
 }
 
 function completeTicket_(ss, ticketId, completedBy, note) {
-  var sheet = ss.getSheetByName('Tickets');
-  if (!sheet) throw new Error('Tickets sheet not found');
+  var sheet = ensureTicketsSheet_(ss);
   var rows = sheet.getDataRange().getValues();
+  var indexes = mapHeaderIndexes_(rows[0]);
   var rowIndex = -1;
   var applicantEmail = '';
   var subject = '';
   for (var i = 1; i < rows.length; i++) {
-    if (String(rows[i][0] || '') === String(ticketId || '')) {
+    if (String(rows[i][indexes['TicketID']] || '') === String(ticketId || '')) {
       rowIndex = i + 1;
-      applicantEmail = rows[i][2];
-      subject = rows[i][9];
+      applicantEmail = rows[i][indexes['ApplicantEmail']];
+      subject = rows[i][indexes['Subject']];
       break;
     }
   }
   if (rowIndex < 0) throw new Error('Ticket not found: ' + ticketId);
-  sheet.getRange(rowIndex, 7).setValue('Completed');
-  sheet.getRange(rowIndex, 8).setValue('END');
-  sheet.getRange(rowIndex, 14).setValue('');
+  setTicketCell_(sheet, indexes, rowIndex, 'Status', 'Completed');
+  setTicketCell_(sheet, indexes, rowIndex, 'CurrentStage', 'END');
+  setTicketCell_(sheet, indexes, rowIndex, 'CurrentApprover', '');
 
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp'])
     .appendRow([ticketId, 'Completed', completedBy || '', 'END', note || '後台完成結案', formatTaipeiDateTime_(new Date())]);
@@ -302,24 +344,194 @@ function completeTicket_(ss, ticketId, completedBy, note) {
   return { id: ticketId, status: 'Completed' };
 }
 
+function resubmitTicket_(ss, payload) {
+  var ticketId = String(payload.ticketId || '').trim();
+  if (!ticketId) throw new Error('Missing ticketId');
+
+  var sheet = ensureTicketsSheet_(ss);
+  var rows = sheet.getDataRange().getValues();
+  var indexes = mapHeaderIndexes_(rows[0]);
+  var rowIndex = -1;
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][indexes['TicketID']] || '') === ticketId) {
+      rowIndex = i + 1;
+      break;
+    }
+  }
+  if (rowIndex < 0) throw new Error('Ticket not found: ' + ticketId);
+
+  var now = formatTaipeiDateTime_(new Date());
+  var formData = payload.formData || {};
+  setTicketCell_(sheet, indexes, rowIndex, 'Status', payload.status || 'Submitted');
+  setTicketCell_(sheet, indexes, rowIndex, 'CurrentStage', '');
+  setTicketCell_(sheet, indexes, rowIndex, 'CurrentApprover', '');
+  setTicketCell_(sheet, indexes, rowIndex, 'Subject', payload.subject || '');
+  setTicketCell_(sheet, indexes, rowIndex, 'Amount', payload.amount || '');
+  setTicketCell_(sheet, indexes, rowIndex, 'FormData_JSON', JSON.stringify(formData));
+
+  createTicketRelations_(ss, {
+    targetTicketId: ticketId,
+    relatedTicketValue: formData.related_ticket || formData.relatedTicket || '',
+    relationType: formData.relation_type || '',
+    note: formData.relation_note || '',
+    createdBy: payload.actorEmail || '',
+    sourceField: 'related_ticket'
+  });
+  recordAttachmentChecks_(ss, ticketId, payload.attachmentChecks || []);
+
+  ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp'])
+    .appendRow([ticketId, 'Resubmitted', payload.actorEmail || '', '', '重新送出申請', now]);
+
+  return { id: ticketId, status: payload.status || 'Submitted' };
+}
+
 function generateApplicationNumber_(ss, formType, department, now) {
-  var sheet = ensureSheet_(ss, 'Tickets', [
-    'TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType',
-    'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML',
-    'FormData_JSON', 'CurrentApprover'
-  ]);
+  var sheet = ensureTicketsSheet_(ss);
   var dateText = Utilities.formatDate(now, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyyMMdd');
   var prefix = String(formType || 'AP').toUpperCase() + extractDeptCode_(department) + dateText;
   var rows = sheet.getDataRange().getValues();
+  var indexes = mapHeaderIndexes_(rows[0]);
   var maxSeq = 0;
   for (var i = 1; i < rows.length; i++) {
-    var id = String(rows[i][0] || '');
+    var id = String(rows[i][indexes['TicketID']] || '');
     if (id.indexOf(prefix) === 0) {
       var seq = parseInt(id.substring(prefix.length), 10);
       if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
     }
   }
   return prefix + String(maxSeq + 1).padStart(3, '0');
+}
+
+function createTicketRelations_(ss, options) {
+  var relatedIds = parseRelatedTicketIds_(options.relatedTicketValue);
+  if (!relatedIds.length) return [];
+
+  var sheet = ensureSheet_(ss, 'TicketRelations', TICKET_RELATION_HEADERS);
+  ensureColumns_(sheet, TICKET_RELATION_HEADERS);
+  var rows = sheet.getDataRange().getValues();
+  var indexes = mapHeaderIndexes_(rows[0]);
+  var now = formatTaipeiDateTime_(new Date());
+  var appended = [];
+
+  relatedIds.forEach(function(sourceTicketId) {
+    var relationExists = false;
+    for (var i = 1; i < rows.length; i++) {
+      if (
+        String(rows[i][indexes['SourceTicketID']] || '') === sourceTicketId &&
+        String(rows[i][indexes['TargetTicketID']] || '') === options.targetTicketId &&
+        String(rows[i][indexes['Status']] || 'Active') !== 'Deleted'
+      ) {
+        relationExists = true;
+        break;
+      }
+    }
+    if (relationExists) return;
+
+    var relationId = 'REL-' + Utilities.formatDate(new Date(), TAIPEI_TIME_ZONE, 'yyyyMMddHHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
+    sheet.appendRow(buildRowFromObject_(sheet.getDataRange().getValues()[0], {
+      RelationID: relationId,
+      SourceTicketID: sourceTicketId,
+      TargetTicketID: options.targetTicketId,
+      RelationType: options.relationType || '',
+      Note: options.note || '',
+      CreatedBy: options.createdBy || '',
+      CreatedAt: now,
+      SourceField: options.sourceField || 'related_ticket',
+      Status: 'Active'
+    }));
+    appended.push(relationId);
+  });
+
+  return appended;
+}
+
+function parseRelatedTicketIds_(value) {
+  return String(value || '')
+    .split(/[\s,;，、]+/)
+    .map(function(item) { return item.trim(); })
+    .filter(function(item, index, all) { return item && all.indexOf(item) === index; });
+}
+
+function recordAttachmentChecks_(ss, ticketId, checks) {
+  if (!checks || !checks.length) return;
+  var sheet = ensureSheet_(ss, 'AttachmentChecks', ATTACHMENT_CHECK_HEADERS);
+  ensureColumns_(sheet, ATTACHMENT_CHECK_HEADERS);
+  var headers = sheet.getDataRange().getValues()[0];
+  checks.forEach(function(check, index) {
+    sheet.appendRow(buildRowFromObject_(headers, {
+      AttachmentID: check.attachmentId || ('ATT-' + ticketId + '-' + (index + 1)),
+      TicketID: ticketId,
+      FieldKey: check.fieldKey || '',
+      Url: check.url || '',
+      VersionNote: check.versionNote || '',
+      CheckStatus: check.checkStatus || '',
+      Warning: check.warning || '',
+      CheckedAt: check.checkedAt ? formatFromIsoOrNow_(check.checkedAt) : formatTaipeiDateTime_(new Date())
+    }));
+  });
+}
+
+function formatFromIsoOrNow_(value) {
+  var date = new Date(value);
+  if (isNaN(date.getTime())) return formatTaipeiDateTime_(new Date());
+  return formatTaipeiDateTime_(date);
+}
+
+function syncAmlRpResults_(ss) {
+  var ticketSheet = ensureTicketsSheet_(ss);
+  var ticketRows = ticketSheet.getDataRange().getValues();
+  if (ticketRows.length < 2) return { updated: 0, reason: 'No tickets' };
+
+  var ticketIndexes = mapHeaderIndexes_(ticketRows[0]);
+  var amlSheetId = getSetting_(ss, 'AML_SHEET_ID', '1DBnDX8xyLIGhXB-EWjIIeCgmCsoP7pWD0kbryG4rCq4');
+  var amlSheet = SpreadsheetApp.openById(amlSheetId).getSheets()[0];
+  var amlRows = amlSheet.getDataRange().getValues();
+  if (amlRows.length < 2) return { updated: 0, reason: 'No AML rows' };
+
+  var amlIndexes = mapHeaderIndexes_(amlRows[0]);
+  var amlTicketIndex = amlIndexes['表單編號'];
+  if (amlTicketIndex == null) return { updated: 0, reason: 'Missing AML ticket id column' };
+
+  var amlByTicketId = {};
+  for (var i = 1; i < amlRows.length; i++) {
+    var ticketId = String(amlRows[i][amlTicketIndex] || '').trim();
+    if (!ticketId) continue;
+    amlByTicketId[ticketId] = amlRows[i];
+  }
+
+  var updated = 0;
+  var now = formatTaipeiDateTime_(new Date());
+  for (var rowIndex = 1; rowIndex < ticketRows.length; rowIndex++) {
+    var mainTicketId = String(ticketRows[rowIndex][ticketIndexes['TicketID']] || '').trim();
+    var amlRow = amlByTicketId[mainTicketId];
+    if (!amlRow) continue;
+
+    var nextAmlResult = readAmlCell_(amlRow, amlIndexes, '風控AML');
+    var nextAmlComment = readAmlCell_(amlRow, amlIndexes, '備註');
+    var nextRpResult = readAmlCell_(amlRow, amlIndexes, '關係人(是/否)');
+    var nextRpComment = readAmlCell_(amlRow, amlIndexes, '備註');
+    var changed =
+      String(ticketRows[rowIndex][ticketIndexes['AML_Result']] || '') !== nextAmlResult ||
+      String(ticketRows[rowIndex][ticketIndexes['AML_Comment']] || '') !== nextAmlComment ||
+      String(ticketRows[rowIndex][ticketIndexes['RP_Result']] || '') !== nextRpResult ||
+      String(ticketRows[rowIndex][ticketIndexes['RP_Comment']] || '') !== nextRpComment;
+
+    if (!changed) continue;
+    setTicketCell_(ticketSheet, ticketIndexes, rowIndex + 1, 'AML_Result', nextAmlResult);
+    setTicketCell_(ticketSheet, ticketIndexes, rowIndex + 1, 'AML_Comment', nextAmlComment);
+    setTicketCell_(ticketSheet, ticketIndexes, rowIndex + 1, 'RP_Result', nextRpResult);
+    setTicketCell_(ticketSheet, ticketIndexes, rowIndex + 1, 'RP_Comment', nextRpComment);
+    setTicketCell_(ticketSheet, ticketIndexes, rowIndex + 1, 'AML_LastSyncedAt', now);
+    updated++;
+  }
+
+  return { updated: updated, syncedAt: now };
+}
+
+function readAmlCell_(row, indexes, header) {
+  var index = indexes[header];
+  if (index == null) return '';
+  return String(row[index] || '').trim();
 }
 
 function syncAmlInvestigation_(ss, record) {
@@ -741,12 +953,14 @@ function sendMeetingReminders() {
 function setupRealData() {
   var ss = getSpreadsheet_();
   ensureSheet_(ss, 'Users', ['Email', 'Name', 'Department', 'ManagerEmail', 'Roles']);
-  ensureSheet_(ss, 'Tickets', ['TicketID', 'CreatedAt', 'ApplicantEmail', 'ApplicantName', 'Department', 'FormType', 'Status', 'CurrentStage', 'SLA_Deadline', 'Subject', 'Amount', 'NeedsAML', 'FormData_JSON', 'CurrentApprover']);
+  ensureTicketsSheet_(ss);
   var formTypesSheet = ensureSheet_(ss, 'FormTypes', ['FormID', 'FormName']);
   ensureDefaultFormTypes_(formTypesSheet);
-  ensureSheet_(ss, 'WorkflowRules', ['RuleID', 'FormType', 'Stage', 'ConditionField', 'ConditionOp', 'ConditionVal', 'ApproverType', 'ApproverValue']);
+  ensureWorkflowRulesSheet_(ss);
   ensureSheet_(ss, 'AuditLogs', ['TicketID', 'ActionType', 'ApproverID', 'Stage', 'Comment', 'Timestamp']);
   ensureSheet_(ss, 'FormDefinitions', ['FormID', 'FieldsMarkdown', 'LogicMarkdown', 'ConfigJSON']);
+  ensureSheet_(ss, 'TicketRelations', TICKET_RELATION_HEADERS);
+  ensureSheet_(ss, 'AttachmentChecks', ATTACHMENT_CHECK_HEADERS);
   ensureSheet_(ss, 'MeetingRooms', ['RoomID', 'RoomName', 'Location', 'Capacity', 'IsActive', 'SortOrder', 'OpenTime', 'CloseTime', 'CreatedAt']);
   ensureSheet_(ss, 'MeetingBookings', ['BookingID', 'RoomID', 'RoomName', 'BookerEmail', 'BookerName', 'Department', 'Date', 'StartTime', 'EndTime', 'Purpose', 'Status', 'CreatedAt', 'UpdatedAt', 'CancelledAt', 'CancelledBy', 'ReminderSentAt']);
   ensureSheet_(ss, 'MailRetryQueue', ['RetryKey', 'To', 'Subject', 'Body', 'Name', 'Attempts', 'NextAttemptAt', 'Status', 'LastError', 'CreatedAt', 'UpdatedAt']);
@@ -904,6 +1118,20 @@ function setupMailRetryTrigger() {
   ScriptApp.newTrigger('processMailRetryQueue').timeBased().everyMinutes(1).create();
 }
 
+function syncAmlRpResults() {
+  return syncAmlRpResults_(getSpreadsheet_());
+}
+
+function setupAmlRpSyncTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'syncAmlRpResults') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('syncAmlRpResults').timeBased().everyMinutes(5).create();
+}
+
 function ensureSheet_(ss, sheetName, headers) {
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
@@ -916,6 +1144,70 @@ function ensureSheet_(ss, sheetName, headers) {
     sheet.appendRow(headers);
   }
   return sheet;
+}
+
+function ensureTicketsSheet_(ss) {
+  var sheet = ensureSheet_(ss, 'Tickets', TICKET_HEADERS);
+  ensureColumns_(sheet, TICKET_HEADERS);
+  return sheet;
+}
+
+function ensureWorkflowRulesSheet_(ss) {
+  var sheet = ensureSheet_(ss, 'WorkflowRules', WORKFLOW_RULE_HEADERS);
+  var rows = sheet.getDataRange().getValues();
+  var headers = rows[0] || [];
+  var indexes = mapHeaderIndexes_(headers);
+  var isLegacyWorkflow = indexes['Stage'] != null || indexes['ApproverType'] != null;
+
+  if (isLegacyWorkflow) {
+    archiveWorkflowRules_(ss, sheet);
+    sheet.clear();
+    sheet.appendRow(WORKFLOW_RULE_HEADERS);
+    sheet.getRange(1, 1, 1, WORKFLOW_RULE_HEADERS.length).setFontWeight('bold').setBackground('#d9ead3');
+  }
+
+  ensureColumns_(sheet, WORKFLOW_RULE_HEADERS);
+  return sheet;
+}
+
+function archiveWorkflowRules_(ss, sheet) {
+  var timestamp = Utilities.formatDate(new Date(), TAIPEI_TIME_ZONE, 'yyyyMMddHHmmss');
+  var archiveName = 'WorkflowRules_Legacy_' + timestamp;
+  if (ss.getSheetByName(archiveName)) archiveName += '_' + Math.floor(Math.random() * 900 + 100);
+  var archived = sheet.copyTo(ss);
+  archived.setName(archiveName);
+}
+
+function ensureColumns_(sheet, requiredHeaders) {
+  if (!requiredHeaders || !requiredHeaders.length) return;
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(requiredHeaders);
+    return;
+  }
+
+  var lastColumn = Math.max(sheet.getLastColumn(), 1);
+  var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  var existing = {};
+  headers.forEach(function(header) {
+    if (String(header || '').trim()) existing[String(header).trim()] = true;
+  });
+
+  var missing = requiredHeaders.filter(function(header) { return !existing[header]; });
+  if (!missing.length) return;
+  sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+  sheet.getRange(1, headers.length + 1, 1, missing.length).setFontWeight('bold').setBackground('#d9ead3');
+}
+
+function buildRowFromObject_(headers, values) {
+  return headers.map(function(header) {
+    var key = String(header || '').trim();
+    return values[key] != null ? values[key] : '';
+  });
+}
+
+function setTicketCell_(sheet, indexes, rowIndex, header, value) {
+  if (indexes[header] == null) return;
+  sheet.getRange(rowIndex, indexes[header] + 1).setValue(value);
 }
 
 function getSetting_(ss, key, fallback) {

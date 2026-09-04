@@ -1,5 +1,25 @@
 # 內部簽核系統 - 開發工作紀錄 (AI Work Record)
 
+## 2026-09-04 申請勾稽、AML/RP 回寫、附件警示與稽核匯出
+
+本次版本將系統定位整理為「內部申請管理與稽核軌跡系統」：申請人填寫表單後自動產生單號、建立紀錄，後台人員可控管、查詢、匯出與完成結案。前台不呈現主管逐關處理機制。
+
+### 已完成調整
+- 新增 `TicketRelations` 資料表合約，表單中的 `related_ticket` 會建立「來源單號 -> 新產生單號」的關聯，不改原本單號規則。
+- 前台與後台查詢會顯示關聯單號，但對關聯到的其他申請只提供基本資訊：單號、表單、主旨、狀態、申請人、部門與建立時間。
+- 新增 AML/RP 回寫流程：主系統取 AML DB 的 `風控AML` 作為 `AML_Result`，取 `關係人(是/否)` 作為 `RP_Result`；`AML完成` 不參與判斷。
+- `RP_Result` 若為「是，已過關係人會議」，前台顯示為「已過關係人」；若為 `Pending`，前台保留顯示 `Pending`。
+- 新增 `AttachmentChecks` 資料表合約，送出時會檢查附件欄位是否可作為查核連結；警示只標記，不阻擋送出。
+- 新增後台多條件篩選與 Excel-readable `.xls` 稽核包匯出，內容包含 Tickets、AuditLogs、Relations、AML/RP 與 Attachments。
+- `WorkflowRules` 已整理為新版「後台處理提示規則」表頭；若偵測到舊逐關規則表，Apps Script 會先備份成 `WorkflowRules_Legacy_*`，再重建新表頭。
+
+### Apps Script 操作提示
+- 更新 Apps Script 後，建議先執行 `setupRealData()`，讓 `Tickets` 補齊 AML/RP 欄位，並建立 `TicketRelations`、`AttachmentChecks` 與新版 `WorkflowRules`。
+- 若希望 AML/RP 不只在查詢時同步，可再執行 `setupAmlRpSyncTrigger()` 建立每 5 分鐘同步。
+- 郵件重送維持原設定：初次同步寄送失敗會寫入 `MailRetryQueue`，2 分鐘後只重送 1 次。
+
+---
+
 ## JWT 簡易身份驗證實作
 
 已完成 `implementation_plan.md` 中的 JWT 簡易驗證計畫，概述如下：

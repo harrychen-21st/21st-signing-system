@@ -6,12 +6,13 @@ import { authFetch } from './authFetch';
 
 interface Rule {
   id: string;
-  stage: number;
-  conditionField: string;
-  conditionOp: string;
-  conditionVal: string;
-  approverType: 'MANAGER' | 'ROLE' | 'SPECIAL:AML_CHECK' | 'DEPT';
-  approverValue: string;
+  ruleName: string;
+  triggerField: string;
+  triggerOp: string;
+  triggerValue: string;
+  handlingRole: string;
+  handlingNote: string;
+  isActive: string | boolean;
 }
 
 interface FormType {

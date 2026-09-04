@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle, FileText, Loader2, Mail, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle, FileSpreadsheet, FileText, Link2, Loader2, Mail, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { authFetch } from './authFetch';
 
 interface Ticket {
@@ -12,8 +12,52 @@ interface Ticket {
   status: string;
   subject: string;
   amount: string;
+  amlResult?: string;
+  amlComment?: string;
+  rpResult?: string;
+  rpComment?: string;
+  relations?: RelationSummary[];
+  attachmentWarnings?: AttachmentWarning[];
   formData?: Record<string, unknown>;
 }
+
+interface TicketBasic {
+  id: string;
+  createdAt: string;
+  applicantName: string;
+  dept: string;
+  formType: string;
+  status: string;
+  subject: string;
+}
+
+interface RelationSummary {
+  id: string;
+  sourceTicketId: string;
+  targetTicketId: string;
+  relationType?: string;
+  note?: string;
+  direction: 'source' | 'target';
+  linkedTicket?: TicketBasic | null;
+}
+
+interface AttachmentWarning {
+  id?: string;
+  fieldKey: string;
+  url: string;
+  versionNote?: string;
+  warning?: string;
+}
+
+type Filters = {
+  dept: string;
+  formType: string;
+  status: string;
+  taxId: string;
+  dateFrom: string;
+  dateTo: string;
+  relationId: string;
+};
 
 const statusLabels: Record<string, string> = {
   Submitted: '已送出',
@@ -22,8 +66,8 @@ const statusLabels: Record<string, string> = {
   Completed: '已完成',
   Cancelled: '已作廢',
   Pending: '舊資料：待處理',
-  Approved: '舊資料：已核准',
-  Rejected: '舊資料：已駁回',
+  Approved: '舊資料：已結案',
+  Rejected: '舊資料：退回補件',
 };
 
 const isCompletedStatus = (status: string) => status === 'Completed' || status === 'Approved';
@@ -31,6 +75,21 @@ const isCompletedStatus = (status: string) => status === 'Completed' || status =
 function valueOf(ticket: Ticket, key: string) {
   const value = ticket.formData?.[key];
   return value == null || value === '' ? '-' : String(value);
+}
+
+function parseDateMs(value: string) {
+  const match = String(value || '').match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    const [, year, month, day, hour, minute, second = '0'] = match;
+    return new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hour.padStart(2, '0')}:${minute}:${second.padStart(2, '0')}+08:00`).getTime();
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function displayCheckValue(value?: string) {
+  const text = String(value || '').trim();
+  return text || '尚無資料';
 }
 
 function matchesTicketSearch(ticket: Ticket, query: string) {
@@ -48,10 +107,30 @@ function matchesTicketSearch(ticket: Ticket, query: string) {
     statusLabels[ticket.status],
     ticket.subject,
     ticket.amount,
+    ticket.amlResult,
+    ticket.rpResult,
+    ...(ticket.relations || []).map((relation) => `${relation.id} ${relation.sourceTicketId} ${relation.targetTicketId} ${relation.linkedTicket?.subject || ''}`),
     ...Object.values(ticket.formData || {}).map((value) => String(value ?? '')),
   ].join(' ').toLowerCase();
 
   return searchableText.includes(keyword);
+}
+
+function matchesFilters(ticket: Ticket, filters: Filters) {
+  if (filters.dept && !ticket.dept.toLowerCase().includes(filters.dept.toLowerCase())) return false;
+  if (filters.formType && ticket.formType !== filters.formType) return false;
+  if (filters.status && ticket.status !== filters.status) return false;
+  if (filters.taxId && !valueOf(ticket, 'ext_tax_id').toLowerCase().includes(filters.taxId.toLowerCase())) return false;
+  if (filters.dateFrom && parseDateMs(ticket.createdAt) < new Date(`${filters.dateFrom}T00:00:00+08:00`).getTime()) return false;
+  if (filters.dateTo && parseDateMs(ticket.createdAt) > new Date(`${filters.dateTo}T23:59:59+08:00`).getTime()) return false;
+  if (filters.relationId) {
+    const relationText = (ticket.relations || [])
+      .map((relation) => `${relation.id} ${relation.sourceTicketId} ${relation.targetTicketId}`)
+      .join(' ')
+      .toLowerCase();
+    if (!relationText.includes(filters.relationId.toLowerCase())) return false;
+  }
+  return true;
 }
 
 export default function ApproverDashboard({ user }: { user: any }) {
@@ -60,6 +139,16 @@ export default function ApproverDashboard({ user }: { user: any }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [note, setNote] = useState<Record<string, string>>({});
   const [searchQuery, setSearchQuery] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [filters, setFilters] = useState<Filters>({
+    dept: '',
+    formType: '',
+    status: '',
+    taxId: '',
+    dateFrom: '',
+    dateTo: '',
+    relationId: '',
+  });
 
   const fetchTickets = async () => {
     setIsFetching(true);
@@ -76,7 +165,9 @@ export default function ApproverDashboard({ user }: { user: any }) {
     }
   };
 
-  const filteredTickets = tickets.filter((ticket) => matchesTicketSearch(ticket, searchQuery));
+  const filteredTickets = tickets.filter((ticket) => matchesTicketSearch(ticket, searchQuery) && matchesFilters(ticket, filters));
+  const formTypeOptions = Array.from(new Set(tickets.map((ticket) => ticket.formType).filter(Boolean))).sort();
+  const statusOptions = Array.from(new Set(tickets.map((ticket) => ticket.status).filter(Boolean))).sort();
 
   useEffect(() => {
     fetchTickets();
@@ -100,6 +191,40 @@ export default function ApproverDashboard({ user }: { user: any }) {
       alert(error.message || '完成結案失敗');
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const updateFilter = (key: keyof Filters, value: string) => {
+    setFilters((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const exportAuditPackage = async () => {
+    setIsExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+      });
+      const response = await authFetch(`/api/backoffice/audit-export?${params.toString()}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || '匯出失敗');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `audit-export-${new Date().toISOString().slice(0, 10)}.xls`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error('Failed to export audit package', error);
+      alert(error.message || '匯出稽核包失敗');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -137,6 +262,73 @@ export default function ApproverDashboard({ user }: { user: any }) {
           placeholder="搜尋單號、表單類型、主旨、申請人、部門、統編或商家名稱"
           className="w-full bg-white/80 border border-slate-200 rounded-xl py-3 pl-12 pr-4 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
         />
+      </div>
+
+      <div className="bg-white/70 border border-slate-200 rounded-2xl p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          <input
+            type="text"
+            value={filters.dept}
+            onChange={(event) => updateFilter('dept', event.target.value)}
+            placeholder="部門"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          />
+          <select
+            value={filters.formType}
+            onChange={(event) => updateFilter('formType', event.target.value)}
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          >
+            <option value="">全部表單</option>
+            {formTypeOptions.map((formType) => (
+              <option key={formType} value={formType}>{formType}</option>
+            ))}
+          </select>
+          <select
+            value={filters.status}
+            onChange={(event) => updateFilter('status', event.target.value)}
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          >
+            <option value="">全部狀態</option>
+            {statusOptions.map((status) => (
+              <option key={status} value={status}>{statusLabels[status] || status}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={filters.taxId}
+            onChange={(event) => updateFilter('taxId', event.target.value)}
+            placeholder="統編"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          />
+          <input
+            type="date"
+            value={filters.dateFrom}
+            onChange={(event) => updateFilter('dateFrom', event.target.value)}
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          />
+          <input
+            type="date"
+            value={filters.dateTo}
+            onChange={(event) => updateFilter('dateTo', event.target.value)}
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          />
+          <input
+            type="text"
+            value={filters.relationId}
+            onChange={(event) => updateFilter('relationId', event.target.value)}
+            placeholder="關聯 ID 或單號"
+            className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+          />
+          <button
+            onClick={exportAuditPackage}
+            disabled={isExporting || filteredTickets.length === 0}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl px-4 py-2.5 font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {isExporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <FileSpreadsheet className="w-5 h-5" />}
+            匯出稽核包
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-slate-500">目前篩選結果：{filteredTickets.length} / {tickets.length} 筆</p>
       </div>
 
       {!isFetching && tickets.length === 0 && (
@@ -194,6 +386,56 @@ export default function ApproverDashboard({ user }: { user: any }) {
                   <div>商家名稱：{valueOf(ticket, 'ext_company_name')}</div>
                   <div>負責人姓名：{valueOf(ticket, 'ext_company_owner')}</div>
                   <div>是否涉及外部公司：{valueOf(ticket, 'external_collab')}</div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 pt-2">
+                  <div className="rounded-xl border border-sky-100 bg-sky-50 p-3 text-sm">
+                    <div className="flex items-center gap-2 font-bold text-sky-700 mb-2">
+                      <ShieldCheck className="w-4 h-4" />
+                      AML / 關係人
+                    </div>
+                    <p className="text-slate-700">AML：{displayCheckValue(ticket.amlResult)}</p>
+                    <p className="text-slate-700">關係人：{displayCheckValue(ticket.rpResult)}</p>
+                    {(ticket.amlComment || ticket.rpComment) && (
+                      <p className="text-xs text-slate-500 mt-1 truncate">備註：{ticket.amlComment || ticket.rpComment}</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3 text-sm">
+                    <div className="flex items-center gap-2 font-bold text-indigo-700 mb-2">
+                      <Link2 className="w-4 h-4" />
+                      關聯單號
+                    </div>
+                    {ticket.relations && ticket.relations.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {ticket.relations.slice(0, 3).map((relation) => (
+                          <div key={relation.id} className="text-slate-700">
+                            <span className="font-mono font-semibold">{relation.linkedTicket?.id || (relation.direction === 'source' ? relation.targetTicketId : relation.sourceTicketId)}</span>
+                            <span className="text-xs text-slate-500 ml-2">{relation.linkedTicket?.subject || ''}</span>
+                          </div>
+                        ))}
+                        {ticket.relations.length > 3 && <p className="text-xs text-indigo-600">另有 {ticket.relations.length - 3} 筆</p>}
+                      </div>
+                    ) : (
+                      <p className="text-slate-500">無關聯</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-amber-100 bg-amber-50 p-3 text-sm">
+                    <div className="flex items-center gap-2 font-bold text-amber-700 mb-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      附件警示
+                    </div>
+                    {ticket.attachmentWarnings && ticket.attachmentWarnings.length > 0 ? (
+                      <ul className="space-y-1 list-disc pl-5 text-amber-800">
+                        {ticket.attachmentWarnings.slice(0, 2).map((item, index) => (
+                          <li key={`${item.fieldKey}-${index}`}>{item.warning || '請確認附件權限或網址'}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-slate-500">無警示</p>
+                    )}
+                  </div>
                 </div>
               </div>
 

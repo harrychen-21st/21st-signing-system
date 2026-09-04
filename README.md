@@ -1,20 +1,44 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 21CD 內部申請管理系統
 
-# Run and deploy your AI Studio app
+React/Vite 前端搭配 Express BFF、Google Apps Script 與 Google Sheets 的內部申請管理系統。
 
-This contains everything you need to run your app locally.
+## Current Scope
 
-View your app in AI Studio: https://ai.studio/apps/c64215f0-26ea-478b-aa39-26719a7aa2a8
+- 申請表單填寫與自動產生單號
+- 個人申請查詢與處理紀錄
+- 後台查詢、篩選、完成結案與 Excel 稽核包匯出
+- 單號關聯勾稽：`TicketRelations`
+- AML / 關係人調查資料同步與結果回寫
+- 附件連結檢查警示：`AttachmentChecks`
+- 會議室預約與提醒
+- 系統公告管理
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
-
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Create `.env.local` from `.env.example` and set:
+   - `JWT_SECRET`
+   - `GOOGLE_APPS_SCRIPT_URL`
+   - `GEMINI_API_KEY` if using AI form modeling
+3. Start the app:
    `npm run dev`
+
+## Build And Verify
+
+- Type-check and sync Vercel runtime artifact:
+  `npm run lint`
+- Production build:
+  `npm run build`
+
+`api/app.js` is generated from `server/app.ts` and must be kept in sync for Vercel.
+
+## Apps Script
+
+`apps-script-deploy-clean.js` is the current canonical Apps Script source.
+
+After updating Apps Script, run:
+
+- `setupRealData()` to create or update required sheets and headers.
+- `setupMailRetryTrigger()` to install the mail retry processor if needed.
+- `setupAmlRpSyncTrigger()` to sync AML/RP results every 5 minutes if desired.

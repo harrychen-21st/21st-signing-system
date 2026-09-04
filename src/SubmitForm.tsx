@@ -34,6 +34,12 @@ type SubmittedTicket = {
     riskStatus?: string;
     skipped?: boolean;
   };
+  attachmentWarnings?: {
+    fieldKey: string;
+    url: string;
+    versionNote?: string;
+    warning?: string;
+  }[];
 };
 
 type NoticeItem = {
@@ -54,6 +60,7 @@ const fieldLabels: Record<string, string> = {
   subject: '主旨',
   description: '內容說明',
   attachment: '附件',
+  attachment_version_note: '附件版本/補充說明',
   related_ticket: '相關單號',
   amount: '金額',
   vendor_name: '廠商名稱',
@@ -332,6 +339,7 @@ export default function SubmitForm({ user }: { user: any }) {
         createdAt: new Date().toISOString(),
         formData,
         amlStatus: result.amlStatus,
+        attachmentWarnings: result.attachmentWarnings || [],
       });
     } catch (error) {
       console.error('Error submitting form', error);
@@ -367,6 +375,18 @@ export default function SubmitForm({ user }: { user: any }) {
               {submittedTicket.id}
             </span>
           </p>
+          {submittedTicket.attachmentWarnings && submittedTicket.attachmentWarnings.length > 0 && (
+            <div className="mb-6 text-left bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+              <p className="font-bold mb-2">附件連結已送出，但系統留下以下警示：</p>
+              <ul className="space-y-1 list-disc pl-5">
+                {submittedTicket.attachmentWarnings.map((item, index) => (
+                  <li key={`${item.fieldKey}-${index}`}>
+                    {fieldLabels[item.fieldKey] || item.fieldKey}：{item.warning || '請確認附件權限或網址'}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
             <button
               onClick={() => handlePrint(submittedTicket.id)}
