@@ -88,6 +88,23 @@ const displayCheckValue = (value?: string) => {
   return text || '尚無資料';
 };
 
+const formatAmount = (value: unknown) => {
+  const text = String(value ?? '').replace(/,/g, '').trim();
+  if (!text) return '-';
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return String(value);
+  return numeric.toLocaleString('en-US');
+};
+
+const isAmountField = (key: string) => {
+  const normalized = key.toLowerCase();
+  return normalized === 'amount' || normalized.includes('amount') || normalized.includes('金額');
+};
+
+const displayFieldValue = (key: string, value: unknown) => (
+  isAmountField(key) ? formatAmount(value) : String(value)
+);
+
 const deriveAmlCountersign = (amlResult?: string, rpResult?: string) => {
   const passedAmlText = '沒有找到任何紀錄，OK';
   const nonRelatedText = '經管理處查核非屬關係人交易，且經第三方確認查無反社會或暴力團體相關負面新聞';
@@ -168,6 +185,9 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
   };
   const needsAdminCountersign = ticket.formData?.external_collab === '是';
   const amlCountersign = deriveAmlCountersign(ticket.amlResult, ticket.rpResult);
+  const signerRoles = ticket.formType === 'AP'
+    ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
+    : ['', '', ''];
 
   const formNameMapping: Record<string, string> = {
     'AP': '簽呈單 (AP)',
@@ -176,13 +196,13 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
   };
 
   return (
-    <div className="hidden print:block p-8 bg-white text-black min-h-screen">
-      <div className="text-center mb-8 border-b-2 border-black pb-4">
+    <div className="hidden print:block p-4 bg-white text-black min-h-screen text-[11px]">
+      <div className="text-center mb-4 border-b-2 border-black pb-3">
         <h1 className="text-3xl font-bold">{formNameMapping[ticket.formType] || ticket.formType}</h1>
         <p className="text-sm mt-2 text-gray-600">系統單號：{ticket.id}</p>
       </div>
 
-      <div className="mb-8">
+      <div className="mb-4">
         <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">申請人資訊</h2>
         <div className="grid grid-cols-2 gap-4">
           <div><span className="font-bold">申請人：</span> {ticket.applicantName} ({ticket.applicantEmail})</div>
@@ -192,20 +212,20 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
           {ticket.formType === 'AP' && (
             <>
               <div><span className="font-bold">相關案件編號：</span> {ticket.formData?.related_case_no || '-'}</div>
-              <div><span className="font-bold">預估金額：</span> {ticket.formData?.estimated_amount || ticket.amount || '-'}</div>
+              <div><span className="font-bold">預估金額：</span> {formatAmount(ticket.formData?.estimated_amount || ticket.amount)}</div>
             </>
           )}
         </div>
       </div>
 
-      <div className="mb-8 p-4 bg-gray-50 border border-gray-200">
+      <div className="mb-4 p-3 bg-gray-50 border border-gray-200">
         <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">表單內容</h2>
         <table className="w-full text-left border-collapse">
           <tbody>
             {formFields.map(([key, value]) => (
               <tr key={key} className="border-b border-gray-200">
                 <td className="py-2 px-4 font-bold bg-gray-100 w-1/3">{getLabel(key)}</td>
-                <td className="py-2 px-4">{String(value)}</td>
+                <td className="py-2 px-4">{displayFieldValue(key, value)}</td>
               </tr>
             ))}
           </tbody>
@@ -213,7 +233,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       </div>
 
       {needsAdminCountersign && (
-        <div className="mb-8 p-4 border border-gray-300">
+        <div className="mb-4 p-3 border border-gray-300">
           <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">AML / 關係人調查會簽</h2>
           {amlCountersign.mode === 'text' ? (
             <p className="font-bold">{amlCountersign.text}</p>
@@ -226,15 +246,16 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
         </div>
       )}
 
-      <div className="mb-8">
+      <div className="mb-4">
         <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">簽核欄位</h2>
-        <div className="grid grid-cols-3 border border-gray-300">
-          {['', '', ''].map((_, index) => (
-            <div key={index} className="min-h-[104px] border-r border-gray-300 px-3 py-2 last:border-r-0">
-              <div className="h-16"></div>
-              <div className="border-t border-gray-300 pt-2 text-left text-sm leading-6 text-gray-700">
-                <div>簽核：</div>
-                <div>日期：</div>
+        <div className={`grid border border-gray-300 ${ticket.formType === 'AP' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+          {signerRoles.map((role, index) => (
+            <div key={`${role}-${index}`} className="min-h-[84px] border-r border-gray-300 px-2 py-1.5 last:border-r-0">
+              {role && <div className="mb-1 text-center text-[11px] font-bold text-gray-900">{role}</div>}
+              <div className="h-9"></div>
+              <div className="border-t border-gray-300 pt-1.5 text-left text-[10px] leading-4 text-gray-700">
+                <div>簽核:</div>
+                <div>日期:</div>
               </div>
             </div>
           ))}
@@ -271,7 +292,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
         )}
       </div>
       
-      <div className="mt-16 pt-8 border-t border-gray-400 text-center text-sm text-gray-500">
+      <div className="mt-8 pt-4 border-t border-gray-400 text-center text-sm text-gray-500">
         此為系統自動產生之數位軌跡證明・列印時間：{new Date().toLocaleString()}
       </div>
       <div className="print-page-number">第 1 頁 / 共 1 頁</div>
@@ -500,7 +521,7 @@ export default function TrackDashboard({ user }: { user: any }) {
                     {ticket.subject || '(未提供主旨)'}
                     {ticket.amount && (
                       <span className="text-sm font-medium text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-md ml-2 border border-emerald-100/50">
-                        TWD {Number(ticket.amount).toLocaleString()}
+                        TWD {formatAmount(ticket.amount)}
                       </span>
                     )}
                   </h4>

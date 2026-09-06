@@ -434,6 +434,13 @@ const normalizeRpDisplay = (value) => {
   if (text.includes("\u5DF2\u904E\u95DC\u4FC2\u4EBA\u6703\u8B70")) return "\u5DF2\u904E\u95DC\u4FC2\u4EBA";
   return text;
 };
+const formatAmount = (value) => {
+  const text = String(value ?? "").replace(/,/g, "").trim();
+  if (!text) return "";
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return String(value ?? "");
+  return numeric.toLocaleString("en-US");
+};
 const escapeXml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const worksheetXml = (name, headers, rows) => {
   const headerXml = headers.map((header) => `<Cell><Data ss:Type="String">${escapeXml(header)}</Data></Cell>`).join("");
@@ -1441,7 +1448,7 @@ graph TD
             ticket.formType,
             ticket.status,
             ticket.subject,
-            ticket.amount,
+            formatAmount(ticket.amount),
             ticket.formData?.related_case_no || "",
             ticket.formData?.ext_tax_id || "",
             ticket.formData?.ext_company_name || ticket.formData?.vendor_name || "",

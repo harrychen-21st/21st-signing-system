@@ -560,6 +560,14 @@ const normalizeRpDisplay = (value: string) => {
   return text;
 };
 
+const formatAmount = (value: unknown) => {
+  const text = String(value ?? '').replace(/,/g, '').trim();
+  if (!text) return '';
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return String(value ?? '');
+  return numeric.toLocaleString('en-US');
+};
+
 const escapeXml = (value: unknown) =>
   String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -1717,7 +1725,7 @@ graph TD
             ticket.formType,
             ticket.status,
             ticket.subject,
-            ticket.amount,
+            formatAmount(ticket.amount),
             ticket.formData?.related_case_no || '',
             ticket.formData?.ext_tax_id || '',
             ticket.formData?.ext_company_name || ticket.formData?.vendor_name || '',

@@ -77,6 +77,14 @@ function valueOf(ticket: Ticket, key: string) {
   return value == null || value === '' ? '-' : String(value);
 }
 
+function formatAmount(value: unknown) {
+  const text = String(value ?? '').replace(/,/g, '').trim();
+  if (!text) return '-';
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return String(value);
+  return numeric.toLocaleString('en-US');
+}
+
 function parseDateMs(value: string) {
   const match = String(value || '').match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
   if (match) {
@@ -410,7 +418,7 @@ export default function ApproverDashboard({ user }: { user: any }) {
                   <div>申請人：{ticket.applicantName} ({ticket.applicantEmail})</div>
                   <div>需求單位：{ticket.dept}</div>
                   <div>填表日期：{new Date(ticket.createdAt).toLocaleString()}</div>
-                  <div>金額：{ticket.amount || '-'}</div>
+                  <div>金額：{formatAmount(ticket.amount)}</div>
                   {ticket.formType === 'AP' && <div>相關案件編號：{valueOf(ticket, 'related_case_no')}</div>}
                   <div>統編：{valueOf(ticket, 'ext_tax_id')}</div>
                   <div>商家名稱：{valueOf(ticket, 'ext_company_name')}</div>

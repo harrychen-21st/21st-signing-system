@@ -121,6 +121,23 @@ function displayValue(value: unknown) {
   return String(value);
 }
 
+function formatAmount(value: unknown) {
+  const text = String(value ?? '').replace(/,/g, '').trim();
+  if (!text) return '-';
+  const numeric = Number(text);
+  if (!Number.isFinite(numeric)) return String(value);
+  return numeric.toLocaleString('en-US');
+}
+
+function isAmountField(key: string) {
+  const normalized = key.toLowerCase();
+  return normalized === 'amount' || normalized.includes('amount') || normalized.includes('金額');
+}
+
+function displayFieldValue(key: string, value: unknown) {
+  return isAmountField(key) ? formatAmount(value) : displayValue(value);
+}
+
 function normalizeCheckText(value: unknown) {
   return String(value || '').trim();
 }
@@ -153,10 +170,13 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const needsAdminCountersign = ticket.formData.external_collab === '是';
   const amlCountersign = deriveAmlCountersign(ticket.amlStatus);
   const handlingUnitText = ticket.formType === 'CS' ? '管理處(法務)：請補充法務確認或 Email 紀錄' : '';
+  const signerRoles = ticket.formType === 'AP'
+    ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
+    : ['', '', ''];
 
   return (
-    <div className="print-page hidden print:block bg-white text-slate-950 text-[12px] leading-relaxed">
-      <header className="mb-5 border-b-2 border-slate-950 pb-3">
+    <div className="print-page hidden print:block bg-white text-slate-950 text-[11px] leading-relaxed">
+      <header className="mb-3 border-b-2 border-slate-950 pb-2">
         <div className="flex items-start justify-between gap-6">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-500">21CD Internal Request</p>
@@ -170,9 +190,9 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
         </div>
       </header>
 
-      <section className="print-section mb-4">
+      <section className="print-section mb-3">
         <h2 className="mb-2 text-sm font-bold text-slate-900">申請資訊</h2>
-        <div className="grid grid-cols-4 gap-x-4 gap-y-2 border-y border-slate-200 py-3">
+        <div className="grid grid-cols-4 gap-x-4 gap-y-1.5 border-y border-slate-200 py-2">
           <div>
             <div className="text-[10px] font-semibold text-slate-500">申請人</div>
             <div className="font-semibold">{ticket.applicantName}</div>
@@ -193,7 +213,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
               </div>
               <div className="col-span-2">
                 <div className="text-[10px] font-semibold text-slate-500">預估金額</div>
-                <div className="font-semibold">{displayValue(ticket.formData.estimated_amount)}</div>
+                <div className="font-semibold">{formatAmount(ticket.formData.estimated_amount)}</div>
               </div>
             </>
           )}
@@ -207,7 +227,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
         </div>
       </section>
 
-      <section className="mb-4">
+      <section className="mb-3">
         <h2 className="mb-2 text-sm font-bold text-slate-900">申請內容</h2>
         <div className="grid grid-cols-2 gap-x-5 gap-y-2">
           {visibleEntries.map(([key, value]) => {
@@ -217,13 +237,13 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
                 key={key}
                 className={
                   longField
-                    ? 'print-long-field col-span-2 rounded-md border border-slate-300 p-3'
+                    ? 'print-long-field col-span-2 rounded-md border border-slate-300 p-2'
                     : 'border-b border-slate-200 pb-1.5'
                 }
               >
                 <div className="text-[10px] font-semibold text-slate-500">{fieldLabels[key] || key}</div>
-                <div className={longField ? 'mt-1 min-h-28 whitespace-pre-wrap break-words font-medium leading-6 text-slate-900' : 'min-h-5 whitespace-pre-wrap break-words font-medium text-slate-900'}>
-                  {displayValue(value)}
+                <div className={longField ? 'mt-1 min-h-20 whitespace-pre-wrap break-words font-medium leading-5 text-slate-900' : 'min-h-5 whitespace-pre-wrap break-words font-medium text-slate-900'}>
+                  {displayFieldValue(key, value)}
                 </div>
               </div>
             );
@@ -231,7 +251,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
         </div>
       </section>
 
-      <section className="print-section mb-4">
+      <section className="print-section mb-3">
         <h2 className="mb-2 text-sm font-bold text-slate-900">內部處理紀錄</h2>
         <div className="grid grid-cols-[96px_1fr] overflow-hidden rounded-md border border-slate-300">
           <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">處理單位</div>
@@ -242,8 +262,8 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
       </section>
 
       {needsAdminCountersign && (
-        <section className="print-section mb-4 rounded-md border border-slate-300 p-3">
-          <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
+        <section className="print-section mb-3 rounded-md border border-slate-300 p-2.5">
+          <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-1.5">
             <h2 className="text-sm font-bold text-slate-900">AML / 關係人調查紀錄</h2>
             <div className="font-semibold text-slate-700">處理單位：管理處 / 風控</div>
           </div>
@@ -262,22 +282,23 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
               <span className="mt-4 block flex-1 border-b border-slate-400"></span>
             </label>
           </div>
-          <div className="mt-3 grid grid-cols-[96px_1fr] overflow-hidden rounded-md border border-slate-300">
+          <div className="mt-2 grid grid-cols-[96px_1fr] overflow-hidden rounded-md border border-slate-300">
             <div className="border-r border-slate-300 bg-slate-100 px-3 py-2 font-semibold">紀錄與日期</div>
-            <div className="min-h-10 px-3 py-2"></div>
+            <div className="min-h-8 px-3 py-2"></div>
           </div>
         </section>
       )}
 
-      <section className="print-section mb-4">
+      <section className="print-section mb-3">
         <h2 className="mb-2 text-sm font-bold text-slate-900">簽核欄位</h2>
-        <div className="grid grid-cols-3 overflow-hidden rounded-md border border-slate-300">
-          {['', '', ''].map((_, index) => (
-            <div key={index} className="min-h-[104px] border-r border-slate-300 px-3 py-2 last:border-r-0">
-              <div className="h-16"></div>
-              <div className="border-t border-slate-300 pt-2 text-left text-[11px] leading-5 text-slate-700">
-                <div>簽核：</div>
-                <div>日期：</div>
+        <div className={`grid overflow-hidden rounded-md border border-slate-300 ${ticket.formType === 'AP' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+          {signerRoles.map((role, index) => (
+            <div key={`${role}-${index}`} className="min-h-[84px] border-r border-slate-300 px-2 py-1.5 last:border-r-0">
+              {role && <div className="mb-1 text-center text-[11px] font-bold text-slate-900">{role}</div>}
+              <div className="h-9"></div>
+              <div className="border-t border-slate-300 pt-1.5 text-left text-[10px] leading-4 text-slate-700">
+                <div>簽核:</div>
+                <div>日期:</div>
               </div>
             </div>
           ))}
