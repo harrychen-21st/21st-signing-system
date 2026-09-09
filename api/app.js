@@ -225,7 +225,7 @@ const canAccessBackoffice = (user) => {
   ].includes(role));
 };
 const isSameUserOrAdmin = (requestedEmail, user) => isAdminUser(user) || String(user?.email || "").toLowerCase() === String(requestedEmail || "").toLowerCase();
-const allowedGeneratedFieldTypes = /* @__PURE__ */ new Set(["text", "number", "date", "select", "textarea"]);
+const allowedGeneratedFieldTypes = /* @__PURE__ */ new Set(["text", "number", "date", "select", "multiselect", "textarea"]);
 const allowedGeneratedRuleOps = /* @__PURE__ */ new Set(["ALWAYS", "==", "!=", ">", ">=", "<", "<=", "IN", "CONTAINS"]);
 const normalizeGeneratedFormId = (value) => String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 const normalizeGeneratedHandlingRole = (value) => {
@@ -243,7 +243,7 @@ const normalizeGeneratedFields = (fields = []) => {
       type,
       required: field?.required !== false
     };
-    if (type === "select") {
+    if (type === "select" || type === "multiselect") {
       normalized.options = Array.isArray(field?.options) ? field.options.map((option) => String(option).trim()).filter(Boolean) : [];
       if (!normalized.options.length) normalized.options = ["\u662F", "\u5426"];
     }
@@ -440,6 +440,37 @@ const formatAmount = (value) => {
   const numeric = Number(text);
   if (!Number.isFinite(numeric)) return String(value ?? "");
   return numeric.toLocaleString("en-US");
+};
+const parseSheetDateMs = (value) => {
+  if (value instanceof Date) return value.getTime();
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6] || 0)
+    ).getTime();
+  }
+  const parsed = new Date(text).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const parseRelatedTicketIds = (value) => String(value || "").split(/[\s,;，、]+/).map((item) => item.trim()).filter((item, index, all) => item && all.indexOf(item) === index);
+const hasRelatedPriorApTicket = async (scriptUrl, relatedTicketValue, currentCreatedAt) => {
+  const relatedIds = new Set(parseRelatedTicketIds(relatedTicketValue));
+  if (!relatedIds.size) return false;
+  try {
+    const rows = await getOptionalSheetRows(scriptUrl, "Tickets", ticketHeaders);
+    const tickets = parseTicketRows(rows);
+    const currentTime = currentCreatedAt.getTime();
+    return tickets.some((ticket) => relatedIds.has(ticket.id) && ticket.formType === "AP" && parseSheetDateMs(ticket.createdAt) > 0 && parseSheetDateMs(ticket.createdAt) <= currentTime);
+  } catch (error) {
+    console.warn("Unable to check related AP ticket before submit:", error);
+    return false;
+  }
 };
 const escapeXml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const worksheetXml = (name, headers, rows) => {
@@ -1013,14 +1044,17 @@ graph TD
 
 | \u6B04\u4F4D ID | \u6B04\u4F4D\u540D\u7A31 | \u6B04\u4F4D\u578B\u614B | \u5FC5\u586B | \u8AAA\u660E/\u52D5\u614B\u986F\u793A\u689D\u4EF6 |
 | :--- | :--- | :--- | :--- | :--- |
-| **related_ticket** | \u76F8\u95DC\u55AE\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F\u6216\u5408\u7D04\u55AE\u865F\uFF0C\u4FBF\u65BC\u5F8C\u7E8C\u6838\u5C0D |
-| **seal_type** | \u7528\u5370\u985E\u5225 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\uFF1A\u300C\u7D93\u6FDF\u90E8\u7AE0\u300D\u3001\u300C\u9280\u884C\u7528\u7AE0\u300D\u3001\u300C\u6CD5\u52D9\u7AE0\u300D\u3001\u300C\u767C\u7968\u7AE0\u300D\u3001\u300C\u5408\u7D04\u4FBF\u7AE0\u300D |
+| **related_ticket** | \u76F8\u95DC\u55AE\u865F(\u5982\u7C3D\u5448\u7B49) | \u55AE\u884C\u6587\u5B57 | \u5426 | \u642D\u914D\u7C3D\u5448\u3001\u8ACB\u6B3E\u3001\u63A1\u8CFC\u6216\u5408\u7D04\u7B49\u65E2\u6709\u55AE\u865F\uFF0C\u4FBF\u65BC\u5F8C\u7E8C\u6838\u5C0D |
+| **seal_type** | \u7528\u5370\u985E\u5225 | \u8907\u9078 | \u662F | \u53EF\u8907\u9078\uFF1A\u300C\u7D93\u6FDF\u90E8\u7AE0\u300D\u3001\u300C\u9280\u884C\u7528\u7AE0\u300D\u3001\u300C\u6CD5\u52D9\u7AE0\u300D\u3001\u300C\u767C\u7968\u7AE0\u300D\u3001\u300C\u5408\u7D04\u4FBF\u7AE0\u300D |
+| **seal_size** | \u5370\u7AE0\u9700\u6C42 | \u8907\u9078 | \u662F | \u9078\u64C7\u7528\u5370\u985E\u5225\u5F8C\u986F\u793A\uFF1B\u53EF\u52FE\u9078\u300C\u5927\u7AE0\u300D\u3001\u300C\u5C0F\u7AE0\u300D\uFF0C\u82E5\u5927\u5C0F\u7AE0\u90FD\u9700\u8981\u53EF\u5169\u8005\u7686\u52FE |
 | **description** | \u7528\u5370\u6587\u4EF6\u8AAA\u660E | \u591A\u884C\u6587\u5B57 | \u662F | \u8ACB\u8A73\u7D30\u8AAA\u660E\u672C\u6B21\u7528\u5370\u4E4B\u6587\u4EF6\u540D\u7A31\u3001\u7528\u9014\u8207\u4EFD\u6578 |
-| **attachment** | \u7528\u5370\u6587\u4EF6\u8349\u7A3F | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u8CBC\u4E0A\u5F85\u7528\u5370\u6587\u4EF6\u8349\u7A3F\u4E4B\u96F2\u7AEF\u9023\u7D50 |
-| **attachment_version_note** | \u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u6587\u4EF6\u8349\u7A3F\u6709\u591A\u7248\uFF0C\u8ACB\u88DC\u5145\u7248\u672C\u6216\u5DEE\u7570\u8AAA\u660E |`,
+| **external_collab** | \u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u662F\u300D\u6216\u300C\u5426\u300D |
+| **ext_tax_id** | \u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u8F38\u5165\u5F8C\u81EA\u52D5\u5E36\u5165\u5EE0\u5546\u8207\u8CA0\u8CAC\u4EBA\u8CC7\u6599 |
+| **ext_company_name** | \u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31 | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |
+| **ext_company_owner** | \u8CA0\u8CAC\u4EBA\u59D3\u540D | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |`,
         logicMarkdown: `# \u7528\u5370\u7533\u8ACB\u55AE (CS) \u5F8C\u53F0\u8655\u7406\u898F\u5247
 
-\u7528\u5370\u7533\u8ACB\u55AE\u7528\u65BC\u7528\u5370\u9700\u6C42\u7D00\u9304\u3001\u4F86\u6E90\u55AE\u865F\u52FE\u7A3D\u3001\u9644\u4EF6\u7248\u672C\u7BA1\u63A7\u8207\u5F8C\u53F0\u7D50\u6848\u8FFD\u8E64\u3002
+\u7528\u5370\u7533\u8ACB\u55AE\u7528\u65BC\u7528\u5370\u9700\u6C42\u7D00\u9304\u3001\u4F86\u6E90\u55AE\u865F\u52FE\u7A3D\u3001AML/\u95DC\u4FC2\u4EBA\u67E5\u6838\u8207\u5F8C\u53F0\u7D50\u6848\u8FFD\u8E64\uFF1B\u9644\u4EF6\u6539\u56DE\u7D19\u672C\u6D41\u7A0B\uFF0C\u4E0D\u65BC\u7CFB\u7D71\u6B04\u4F4D\u6536\u4EF6\u3002
 
 \`\`\`mermaid
 graph TD
@@ -1029,8 +1063,10 @@ graph TD
     Relation -- \u662F --> Link[\u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u8207 CS \u95DC\u806F]
     Relation -- \u5426 --> Record[\u4FDD\u5B58\u7528\u5370\u8CC7\u6599]
     Link --> Record
-    Record --> Attachment[\u8A18\u9304\u6587\u4EF6\u7248\u672C\u8207\u9023\u7D50\u8B66\u793A]
-    Attachment --> Backoffice[\u5F8C\u53F0\u8655\u7406\u8207\u7528\u5370\u7BA1\u5236]
+    Record --> Check{\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546?}
+    Check -- \u662F --> AML[\u540C\u6B65 AML / \u95DC\u4FC2\u4EBA\u8ABF\u67E5]
+    Check -- \u5426 --> Backoffice[\u5F8C\u53F0\u8655\u7406\u8207\u7528\u5370\u7BA1\u5236]
+    AML --> Backoffice
     Backoffice --> Done[\u5B8C\u6210\u7D50\u6848\u4E26\u4FDD\u7559\u7A3D\u6838\u8ECC\u8DE1]
 \`\`\`
 
@@ -1041,14 +1077,18 @@ graph TD
 | \u55AE\u865F\u7D00\u9304 | \u9001\u51FA\u8868\u55AE | \u7522\u751F CS \u55AE\u865F\u4E26\u4FDD\u5B58\u7528\u5370\u9700\u6C42 |
 | \u55AE\u865F\u52FE\u7A3D | related_ticket \u6709\u503C | \u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u81F3\u672C\u7528\u5370\u7533\u8ACB\u55AE\u7684\u95DC\u806F |
 | \u7528\u5370\u7BA1\u5236 | seal_type \u6709\u503C | \u5F8C\u53F0\u4F9D\u516C\u53F8\u5167\u63A7\u7A0B\u5E8F\u8655\u7406\u8207\u7D50\u6848 |
-| \u9644\u4EF6\u6AA2\u67E5 | \u9644\u4EF6\u6B04\u4F4D\u6709\u503C | \u8A18\u9304\u6587\u4EF6\u7248\u672C\u8AAA\u660E\u8207\u9023\u7D50\u6AA2\u67E5\u8B66\u793A |`,
+| AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5 | external_collab == '\u662F' | \u540C\u6B65 AML \u8ABF\u67E5\u8CC7\u6599\u4E26\u56DE\u5BEB\u67E5\u6838\u7D50\u679C |
+| \u7C3D\u5448\u5DF2\u67E5\u8A62 | related_ticket \u5C0D\u61C9\u8F03\u65E9 AP \u7C3D\u5448 | CS \u5217\u5370\u6703\u7C3D\u6587\u5B57\u986F\u793A\u300C\u7C3D\u5448\u55AE\u5DF2\u67E5\u8A62\u300D |`,
         configJSON: {
           fields: [
-            { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F)", type: "text", required: false },
-            { id: "seal_type", label: "\u7528\u5370\u985E\u5225", type: "select", options: ["\u7D93\u6FDF\u90E8\u7AE0", "\u9280\u884C\u7528\u7AE0", "\u6CD5\u52D9\u7AE0", "\u767C\u7968\u7AE0", "\u5408\u7D04\u4FBF\u7AE0"], required: true },
+            { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F(\u5982\u7C3D\u5448\u7B49)", type: "text", required: false },
+            { id: "seal_type", label: "\u7528\u5370\u985E\u5225", type: "multiselect", options: ["\u7D93\u6FDF\u90E8\u7AE0", "\u9280\u884C\u7528\u7AE0", "\u6CD5\u52D9\u7AE0", "\u767C\u7968\u7AE0", "\u5408\u7D04\u4FBF\u7AE0"], required: true },
+            { id: "seal_size", label: "\u5370\u7AE0\u9700\u6C42", type: "multiselect", options: ["\u5927\u7AE0", "\u5C0F\u7AE0"], required: true, showIf: { field: "seal_type", value: "__FILLED__" } },
             { id: "description", label: "\u7528\u5370\u6587\u4EF6\u8AAA\u660E", type: "textarea", required: true },
-            { id: "attachment", label: "\u7528\u5370\u6587\u4EF6\u8349\u7A3F (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF\u9023\u7D50)", type: "text", required: true },
-            { id: "attachment_version_note", label: "\u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E", type: "text", required: false }
+            { id: "external_collab", label: "\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546", type: "select", options: ["\u5426", "\u662F"], required: true },
+            { id: "ext_tax_id", label: "\u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
+            { id: "ext_company_name", label: "\u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
+            { id: "ext_company_owner", label: "\u8CA0\u8CAC\u4EBA\u59D3\u540D", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } }
           ]
         }
       }
@@ -1201,7 +1241,10 @@ graph TD
         const mockId = `${firstTicket.formType || "AP"}${extractDeptCode(department)}${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "")}001`;
         return res.json({ success: true, generatedIds: [mockId], applicationNumber: mockId, source: "mock" });
       }
-      const attachmentChecks = await buildAttachmentChecks(firstTicket.formData || {});
+      const submittedAt = /* @__PURE__ */ new Date();
+      const formData = firstTicket.formData || {};
+      const relatedApAlreadyChecked = firstTicket.formType === "CS" ? await hasRelatedPriorApTicket(scriptUrl, formData.related_ticket || formData.relatedTicket || "", submittedAt) : false;
+      const attachmentChecks = await buildAttachmentChecks(formData);
       const result = await postToAppsScript(scriptUrl, {
         action: "submitApplication",
         applicantEmail,
@@ -1210,7 +1253,7 @@ graph TD
         formType: firstTicket.formType,
         subject: firstTicket.subject || "",
         amount: firstTicket.amount || "",
-        formData: firstTicket.formData || {},
+        formData,
         attachmentChecks
       });
       invalidateSheetCache(scriptUrl, ["Tickets", "AuditLogs", "TicketRelations", "AttachmentChecks", "TicketBundle"]);
@@ -1218,7 +1261,10 @@ graph TD
         success: true,
         generatedIds: [result.applicationNumber],
         applicationNumber: result.applicationNumber,
-        amlStatus: result.amlStatus,
+        amlStatus: {
+          ...result.amlStatus || {},
+          relatedApAlreadyChecked: Boolean(result.amlStatus?.relatedApAlreadyChecked || relatedApAlreadyChecked)
+        },
         attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === "Warning" || item.warning)
       });
     } catch (error) {

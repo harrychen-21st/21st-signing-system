@@ -7,7 +7,7 @@ import { authFetch } from './authFetch';
 type FormField = {
   id: string;
   label: string;
-  type: 'text' | 'number' | 'date' | 'select' | 'textarea';
+  type: 'text' | 'number' | 'date' | 'select' | 'multiselect' | 'textarea';
   options?: string[];
   required?: boolean;
   showIf?: { field: string; value: string };
@@ -35,6 +35,7 @@ type SubmittedTicket = {
     hasPreviousRecord?: boolean;
     amlResult?: string;
     rpResult?: string;
+    relatedApAlreadyChecked?: boolean;
     skipped?: boolean;
   };
   attachmentWarnings?: {
@@ -64,7 +65,7 @@ const fieldLabels: Record<string, string> = {
   description: '內容說明',
   attachment: '附件',
   attachment_version_note: '附件版本/補充說明',
-  related_ticket: '相關單號',
+  related_ticket: '相關單號(如簽呈等)',
   related_case_no: '相關案件編號',
   estimated_amount: '預估金額',
   amount: '金額',
@@ -72,6 +73,7 @@ const fieldLabels: Record<string, string> = {
   payment_date: '付款期限',
   payment_method: '付款方式',
   seal_type: '用印類別',
+  seal_size: '印章需求',
   external_collab: '是否涉及外部公司',
   ext_tax_id: '統一編號',
   ext_company_name: '商家名稱',
@@ -113,6 +115,7 @@ function withExternalCompanyFields(fields: FormField[] = []) {
 
 function isVisible(field: FormField, formData: Record<string, unknown>) {
   if (!field.showIf) return true;
+  if (field.showIf.value === '__FILLED__') return String(formData[field.showIf.field] || '').trim() !== '';
   return formData[field.showIf.field] === field.showIf.value;
 }
 
@@ -138,6 +141,17 @@ function displayFieldValue(key: string, value: unknown) {
   return isAmountField(key) ? formatAmount(value) : displayValue(value);
 }
 
+function toggleMultiValue(currentValue: unknown, option: string) {
+  const values = String(currentValue || '')
+    .split('、')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const nextValues = values.includes(option)
+    ? values.filter((item) => item !== option)
+    : [...values, option];
+  return nextValues.join('、');
+}
+
 function normalizeCheckText(value: unknown) {
   return String(value || '').trim();
 }
@@ -149,6 +163,9 @@ function deriveAmlCountersign(amlStatus?: SubmittedTicket['amlStatus']) {
   const amlResult = normalizeCheckText(amlStatus?.amlResult);
   const rpResult = normalizeCheckText(amlStatus?.rpResult);
 
+  if (amlStatus?.relatedApAlreadyChecked) {
+    return { mode: 'text' as const, text: '簽呈單已查詢' };
+  }
   if (amlStatus?.hasPreviousRecord && amlResult === passedAmlText && rpResult === '否') {
     return { mode: 'text' as const, text: nonRelatedText };
   }
@@ -165,14 +182,20 @@ function isLongPrintField(key: string) {
 
 function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email', 'expense_category', 'related_case_no', 'estimated_amount']);
-  const visibleEntries = Object.entries(ticket.formData).filter(([key]) => !hiddenPrintFields.has(key));
+  const visibleEntries = Object.entries(ticket.formData).filter(([key]) => {
+    if (hiddenPrintFields.has(key)) return false;
+    if (ticket.formType === 'CS' && (key === 'attachment' || key === 'attachment_version_note')) return false;
+    return true;
+  });
   const formTypeDisplay = ticket.formTypeName || ticket.formType;
   const needsAdminCountersign = ticket.formData.external_collab === '是';
   const amlCountersign = deriveAmlCountersign(ticket.amlStatus);
   const handlingUnitText = ticket.formType === 'CS' ? '管理處(法務)：請補充法務確認或 Email 紀錄' : '';
   const signerRoles = ticket.formType === 'AP'
     ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
-    : ['', '', ''];
+    : ticket.formType === 'CS'
+      ? ['總經理', '財務處主管', '單位本部長', '單位處主管', '申請人']
+      : ['', '', ''];
 
   return (
     <div className="print-page hidden print:block bg-white text-slate-950 text-[11px] leading-relaxed">
@@ -291,7 +314,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
 
       <section className="print-section mb-3">
         <h2 className="mb-2 text-sm font-bold text-slate-900">簽核欄位</h2>
-        <div className={`grid overflow-hidden rounded-md border border-slate-300 ${ticket.formType === 'AP' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+        <div className={`grid overflow-hidden rounded-md border border-slate-300 ${ticket.formType === 'AP' || ticket.formType === 'CS' ? 'grid-cols-5' : 'grid-cols-3'}`}>
           {signerRoles.map((role, index) => (
             <div key={`${role}-${index}`} className="min-h-[84px] border-r border-slate-300 px-2 py-1.5 last:border-r-0">
               {role && <div className="mb-1 text-center text-[11px] font-bold text-slate-900">{role}</div>}
@@ -594,6 +617,29 @@ export default function SubmitForm({ user }: { user: any }) {
                         </option>
                       ))}
                     </select>
+                  ) : field.type === 'multiselect' ? (
+                    <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {field.options?.map((option) => {
+                          const selectedValues = String(dynamicData[field.id] || '').split('、').map((item) => item.trim()).filter(Boolean);
+                          const checked = selectedValues.includes(option);
+                          return (
+                            <label key={option} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors ${checked ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-700'}`}>
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-emerald-600"
+                                checked={checked}
+                                onChange={() => handleDynamicChange(field.id, toggleMultiValue(dynamicData[field.id], option))}
+                              />
+                              <span>{option}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {field.required && !String(dynamicData[field.id] || '').trim() && (
+                        <input className="sr-only" required value="" onChange={() => undefined} />
+                      )}
+                    </div>
                   ) : field.type === 'textarea' ? (
                     <textarea
                       className="form-input !pl-4"

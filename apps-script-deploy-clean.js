@@ -205,6 +205,8 @@ function submitApplication_(ss, payload) {
   var now = new Date();
   var formData = payload.formData || {};
   var applicationNumber = generateApplicationNumber_(ss, payload.formType, payload.department, now);
+  var relatedApAlreadyChecked = String(payload.formType || '').toUpperCase() === 'CS' &&
+    findRelatedPriorApTicket_(ss, formData.related_ticket || formData.relatedTicket || '', now);
   var amlStatus = syncAmlInvestigation_(ss, {
     createdAt: now,
     formType: payload.formType,
@@ -215,6 +217,7 @@ function submitApplication_(ss, payload) {
     taxId: formData.ext_tax_id || '',
     ownerName: formData.ext_company_owner || ''
   });
+  amlStatus.relatedApAlreadyChecked = relatedApAlreadyChecked;
 
   var status = 'Submitted';
   if (formData.external_collab === '是') {
@@ -268,6 +271,36 @@ function submitApplication_(ss, payload) {
   });
 
   return { success: true, applicationNumber: applicationNumber, amlStatus: amlStatus };
+}
+
+function findRelatedPriorApTicket_(ss, relatedTicketValue, currentCreatedAt) {
+  var relatedIds = parseRelatedTicketIds_(relatedTicketValue);
+  if (!relatedIds.length) return false;
+
+  var relatedLookup = {};
+  relatedIds.forEach(function(id) {
+    relatedLookup[String(id || '').trim()] = true;
+  });
+
+  var sheet = ensureTicketsSheet_(ss);
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return false;
+
+  var indexes = mapHeaderIndexes_(rows[0]);
+  var ticketIndex = indexes['TicketID'];
+  var formTypeIndex = indexes['FormType'];
+  var createdAtIndex = indexes['CreatedAt'];
+  if (ticketIndex == null || formTypeIndex == null || createdAtIndex == null) return false;
+
+  var currentTime = parseTaipeiDateTime_(currentCreatedAt).getTime();
+  for (var i = 1; i < rows.length; i++) {
+    var ticketId = String(rows[i][ticketIndex] || '').trim();
+    if (!relatedLookup[ticketId]) continue;
+    if (String(rows[i][formTypeIndex] || '').trim().toUpperCase() !== 'AP') continue;
+    var relatedTime = parseTaipeiDateTime_(rows[i][createdAtIndex]).getTime();
+    if (!isNaN(relatedTime) && !isNaN(currentTime) && relatedTime <= currentTime) return true;
+  }
+  return false;
 }
 
 function getUser_(ss, email) {

@@ -105,13 +105,42 @@ const displayFieldValue = (key: string, value: unknown) => (
   isAmountField(key) ? formatAmount(value) : String(value)
 );
 
-const deriveAmlCountersign = (amlResult?: string, rpResult?: string) => {
+const parseLocalDateMs = (value: string) => {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6] || 0)
+    ).getTime();
+  }
+  const parsed = new Date(text).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const hasEarlierApRelation = (ticket: MyTicket) => {
+  if (ticket.formType !== 'CS') return false;
+  const ticketCreatedAt = parseLocalDateMs(ticket.createdAt);
+  return (ticket.relations || []).some((relation) => {
+    const linked = relation.linkedTicket;
+    if (!linked || linked.formType !== 'AP') return false;
+    const linkedCreatedAt = parseLocalDateMs(linked.createdAt);
+    return linkedCreatedAt > 0 && ticketCreatedAt > 0 && linkedCreatedAt <= ticketCreatedAt;
+  });
+};
+
+const deriveAmlCountersign = (amlResult?: string, rpResult?: string, relatedApAlreadyChecked = false) => {
   const passedAmlText = '沒有找到任何紀錄，OK';
   const nonRelatedText = '經管理處查核非屬關係人交易，且經第三方確認查無反社會或暴力團體相關負面新聞';
   const relatedPassedText = '經管理處查核為關係人交易且已過關係人會議，且經第三方確認查無反社會或暴力團體相關負面新聞';
   const aml = String(amlResult || '').trim();
   const rp = String(rpResult || '').trim();
 
+  if (relatedApAlreadyChecked) return { mode: 'text' as const, text: '簽呈單已查詢' };
   if (aml === passedAmlText && rp === '否') return { mode: 'text' as const, text: nonRelatedText };
   if (aml === passedAmlText && rp.includes('已過關係人會議')) return { mode: 'text' as const, text: relatedPassedText };
   return { mode: 'checkbox' as const, text: relatedPassedText };
@@ -150,7 +179,11 @@ function matchesTicketSearch(ticket: MyTicket, query: string) {
 }
 
 const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
-  const formFields = Object.entries(ticket.formData || {}).filter(([k]) => !hiddenPrintableFormFields.has(k));
+  const formFields = Object.entries(ticket.formData || {}).filter(([k]) => {
+    if (hiddenPrintableFormFields.has(k)) return false;
+    if (ticket.formType === 'CS' && (k === 'attachment' || k === 'attachment_version_note')) return false;
+    return true;
+  });
   
   // A mapping to translate some known field keys to readable labels if we want, mostly they will show their real values
   const getLabel = (key: string) => {
@@ -162,7 +195,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       ext_company_owner: '外部公司負責人',
       ext_tax_id: '統編',
       applicant_related_party: '是否為關係人',
-      related_ticket: '相關單號',
+      related_ticket: '相關單號(如簽呈等)',
       related_case_no: '相關案件編號',
       estimated_amount: '預估金額',
       subject: '主旨',
@@ -178,16 +211,19 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       rd_desc: '用途說明',
       rd_file_count: '附件數量',
       cs_ref_id: '對應來源單號',
-      seal_type: '印章種類',
+      seal_type: '用印類別',
+      seal_size: '印章需求',
       cs_desc: '用印內容與說明'
     };
     return labels[key] || key;
   };
   const needsAdminCountersign = ticket.formData?.external_collab === '是';
-  const amlCountersign = deriveAmlCountersign(ticket.amlResult, ticket.rpResult);
+  const amlCountersign = deriveAmlCountersign(ticket.amlResult, ticket.rpResult, hasEarlierApRelation(ticket));
   const signerRoles = ticket.formType === 'AP'
     ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
-    : ['', '', ''];
+    : ticket.formType === 'CS'
+      ? ['總經理', '財務處主管', '單位本部長', '單位處主管', '申請人']
+      : ['', '', ''];
 
   const formNameMapping: Record<string, string> = {
     'AP': '簽呈單 (AP)',
@@ -248,7 +284,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
 
       <div className="mb-4">
         <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">簽核欄位</h2>
-        <div className={`grid border border-gray-300 ${ticket.formType === 'AP' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+        <div className={`grid border border-gray-300 ${ticket.formType === 'AP' || ticket.formType === 'CS' ? 'grid-cols-5' : 'grid-cols-3'}`}>
           {signerRoles.map((role, index) => (
             <div key={`${role}-${index}`} className="min-h-[84px] border-r border-gray-300 px-2 py-1.5 last:border-r-0">
               {role && <div className="mb-1 text-center text-[11px] font-bold text-gray-900">{role}</div>}

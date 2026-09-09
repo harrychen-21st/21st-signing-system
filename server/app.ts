@@ -302,7 +302,7 @@ const canAccessBackoffice = (user?: { roles?: string[] }) => {
 const isSameUserOrAdmin = (requestedEmail: string, user?: { email?: string; roles?: string[] }) =>
   isAdminUser(user) || String(user?.email || '').toLowerCase() === String(requestedEmail || '').toLowerCase();
 
-const allowedGeneratedFieldTypes = new Set(['text', 'number', 'date', 'select', 'textarea']);
+const allowedGeneratedFieldTypes = new Set(['text', 'number', 'date', 'select', 'multiselect', 'textarea']);
 const allowedGeneratedRuleOps = new Set(['ALWAYS', '==', '!=', '>', '>=', '<', '<=', 'IN', 'CONTAINS']);
 
 const normalizeGeneratedFormId = (value: string) => String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
@@ -324,7 +324,7 @@ const normalizeGeneratedFields = (fields: any[] = []) => {
         type,
         required: field?.required !== false
       };
-      if (type === 'select') {
+      if (type === 'select' || type === 'multiselect') {
         normalized.options = Array.isArray(field?.options) ? field.options.map((option: any) => String(option).trim()).filter(Boolean) : [];
         if (!normalized.options.length) normalized.options = ['是', '否'];
       }
@@ -566,6 +566,50 @@ const formatAmount = (value: unknown) => {
   const numeric = Number(text);
   if (!Number.isFinite(numeric)) return String(value ?? '');
   return numeric.toLocaleString('en-US');
+};
+
+const parseSheetDateMs = (value: unknown) => {
+  if (value instanceof Date) return value.getTime();
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+      Number(match[6] || 0)
+    ).getTime();
+  }
+  const parsed = new Date(text).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseRelatedTicketIds = (value: unknown) =>
+  String(value || '')
+    .split(/[\s,;，、]+/)
+    .map((item) => item.trim())
+    .filter((item, index, all) => item && all.indexOf(item) === index);
+
+const hasRelatedPriorApTicket = async (scriptUrl: string, relatedTicketValue: unknown, currentCreatedAt: Date) => {
+  const relatedIds = new Set(parseRelatedTicketIds(relatedTicketValue));
+  if (!relatedIds.size) return false;
+
+  try {
+    const rows = await getOptionalSheetRows(scriptUrl, 'Tickets', ticketHeaders);
+    const tickets = parseTicketRows(rows);
+    const currentTime = currentCreatedAt.getTime();
+    return tickets.some((ticket) => (
+      relatedIds.has(ticket.id) &&
+      ticket.formType === 'AP' &&
+      parseSheetDateMs(ticket.createdAt) > 0 &&
+      parseSheetDateMs(ticket.createdAt) <= currentTime
+    ));
+  } catch (error) {
+    console.warn('Unable to check related AP ticket before submit:', error);
+    return false;
+  }
 };
 
 const escapeXml = (value: unknown) =>
@@ -1220,14 +1264,17 @@ graph TD
 
 | 欄位 ID | 欄位名稱 | 欄位型態 | 必填 | 說明/動態顯示條件 |
 | :--- | :--- | :--- | :--- | :--- |
-| **related_ticket** | 相關單號 | 單行文字 | 否 | 搭配請/採購單號或合約單號，便於後續核對 |
-| **seal_type** | 用印類別 | 下拉選單 | 是 | 可選擇：「經濟部章」、「銀行用章」、「法務章」、「發票章」、「合約便章」 |
+| **related_ticket** | 相關單號(如簽呈等) | 單行文字 | 否 | 搭配簽呈、請款、採購或合約等既有單號，便於後續核對 |
+| **seal_type** | 用印類別 | 複選 | 是 | 可複選：「經濟部章」、「銀行用章」、「法務章」、「發票章」、「合約便章」 |
+| **seal_size** | 印章需求 | 複選 | 是 | 選擇用印類別後顯示；可勾選「大章」、「小章」，若大小章都需要可兩者皆勾 |
 | **description** | 用印文件說明 | 多行文字 | 是 | 請詳細說明本次用印之文件名稱、用途與份數 |
-| **attachment** | 用印文件草稿 | 單行文字 | 是 | 請貼上待用印文件草稿之雲端連結 |
-| **attachment_version_note** | 附件版本/補充說明 | 單行文字 | 否 | 若文件草稿有多版，請補充版本或差異說明 |`,
+| **external_collab** | 是否涉及外部合作廠商 | 下拉選單 | 是 | 可選擇「是」或「否」 |
+| **ext_tax_id** | 統一編號/識別碼 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，輸入後自動帶入廠商與負責人資料 |
+| **ext_company_name** | 廠商名稱/公司名稱 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |
+| **ext_company_owner** | 負責人姓名 | 單行文字 | 是 | 當「是否涉及外部合作廠商」選擇「是」時顯示，自動由 API 帶入，可手動修改 |`,
         logicMarkdown: `# 用印申請單 (CS) 後台處理規則
 
-用印申請單用於用印需求紀錄、來源單號勾稽、附件版本管控與後台結案追蹤。
+用印申請單用於用印需求紀錄、來源單號勾稽、AML/關係人查核與後台結案追蹤；附件改回紙本流程，不於系統欄位收件。
 
 \`\`\`mermaid
 graph TD
@@ -1236,8 +1283,10 @@ graph TD
     Relation -- 是 --> Link[建立來源單號與 CS 關聯]
     Relation -- 否 --> Record[保存用印資料]
     Link --> Record
-    Record --> Attachment[記錄文件版本與連結警示]
-    Attachment --> Backoffice[後台處理與用印管制]
+    Record --> Check{涉及外部合作廠商?}
+    Check -- 是 --> AML[同步 AML / 關係人調查]
+    Check -- 否 --> Backoffice[後台處理與用印管制]
+    AML --> Backoffice
     Backoffice --> Done[完成結案並保留稽核軌跡]
 \`\`\`
 
@@ -1248,14 +1297,18 @@ graph TD
 | 單號紀錄 | 送出表單 | 產生 CS 單號並保存用印需求 |
 | 單號勾稽 | related_ticket 有值 | 建立來源單號至本用印申請單的關聯 |
 | 用印管制 | seal_type 有值 | 後台依公司內控程序處理與結案 |
-| 附件檢查 | 附件欄位有值 | 記錄文件版本說明與連結檢查警示 |`,
+| AML/關係人調查 | external_collab == '是' | 同步 AML 調查資料並回寫查核結果 |
+| 簽呈已查詢 | related_ticket 對應較早 AP 簽呈 | CS 列印會簽文字顯示「簽呈單已查詢」 |`,
         configJSON: {
           fields: [
-            { id: "related_ticket", label: "相關單號 (搭配請/採購單號)", type: "text", required: false },
-            { id: "seal_type", label: "用印類別", type: "select", options: ["經濟部章", "銀行用章", "法務章", "發票章", "合約便章"], required: true },
+            { id: "related_ticket", label: "相關單號(如簽呈等)", type: "text", required: false },
+            { id: "seal_type", label: "用印類別", type: "multiselect", options: ["經濟部章", "銀行用章", "法務章", "發票章", "合約便章"], required: true },
+            { id: "seal_size", label: "印章需求", type: "multiselect", options: ["大章", "小章"], required: true, showIf: { field: "seal_type", value: "__FILLED__" } },
             { id: "description", label: "用印文件說明", type: "textarea", required: true },
-            { id: "attachment", label: "用印文件草稿 (請貼上雲端連結)", type: "text", required: true },
-            { id: "attachment_version_note", label: "附件版本/補充說明", type: "text", required: false }
+            { id: "external_collab", label: "是否涉及外部合作廠商", type: "select", options: ["否", "是"], required: true },
+            { id: "ext_tax_id", label: "統一編號/識別碼", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
+            { id: "ext_company_name", label: "廠商名稱/公司名稱", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
+            { id: "ext_company_owner", label: "負責人姓名", type: "text", required: true, showIf: { field: "external_collab", value: "是" } }
           ]
         }
       }
@@ -1432,7 +1485,12 @@ graph TD
         return res.json({ success: true, generatedIds: [mockId], applicationNumber: mockId, source: 'mock' });
       }
 
-      const attachmentChecks = await buildAttachmentChecks(firstTicket.formData || {});
+      const submittedAt = new Date();
+      const formData = firstTicket.formData || {};
+      const relatedApAlreadyChecked = firstTicket.formType === 'CS'
+        ? await hasRelatedPriorApTicket(scriptUrl, formData.related_ticket || formData.relatedTicket || '', submittedAt)
+        : false;
+      const attachmentChecks = await buildAttachmentChecks(formData);
       const result = await postToAppsScript(scriptUrl, {
         action: 'submitApplication',
         applicantEmail,
@@ -1441,7 +1499,7 @@ graph TD
         formType: firstTicket.formType,
         subject: firstTicket.subject || '',
         amount: firstTicket.amount || '',
-        formData: firstTicket.formData || {},
+        formData,
         attachmentChecks
       });
       invalidateSheetCache(scriptUrl, ['Tickets', 'AuditLogs', 'TicketRelations', 'AttachmentChecks', 'TicketBundle']);
@@ -1450,7 +1508,10 @@ graph TD
         success: true,
         generatedIds: [result.applicationNumber],
         applicationNumber: result.applicationNumber,
-        amlStatus: result.amlStatus,
+        amlStatus: {
+          ...(result.amlStatus || {}),
+          relatedApAlreadyChecked: Boolean(result.amlStatus?.relatedApAlreadyChecked || relatedApAlreadyChecked)
+        },
         attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === 'Warning' || item.warning)
       });
     } catch (error: any) {

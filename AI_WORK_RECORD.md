@@ -1,5 +1,23 @@
 # 內部簽核系統 - 開發工作紀錄 (AI Work Record)
 
+## 2026-09-09 CS 用印申請單欄位與列印/PDF 調整
+
+### 已完成調整
+- CS `related_ticket` 顯示名稱改為 `相關單號(如簽呈等)`，欄位 ID 維持不變，確保既有單號勾稽與 `TicketRelations` 不受影響。
+- CS `seal_type` 用印類別由單選改為複選，可同時選擇多種用印類別；新增 `seal_size` 印章需求複選，可勾選 `大章`、`小章` 或兩者皆選。
+- CS 線上附件欄位已從表單定義移除；歷史 CS 資料列印時也不再顯示舊的附件欄位。
+- CS 涉及外部合作廠商時沿用 AP 的 AML/關係人調查會簽文字規則。
+- 若 CS 的 `related_ticket` 對應到較早建立的 AP 簽呈單，列印/PDF 的 AML/關係人會簽文字改為 `簽呈單已查詢`。
+- CS 簽核欄位改為五欄並套用 AP 版面格式：`總經理`、`財務處主管`、`單位本部長`、`單位處主管`、`申請人`；不再使用董事長與管理本部長。
+- 頁碼維持列印固定顯示，原則上搭配縮版列印樣式維持一頁。
+
+### DB 影響
+- 不新增 `Tickets` 表頭；`seal_type` 與 `seal_size` 皆存於既有 `FormData_JSON`。
+- `related_ticket` 欄位 ID 不變，仍用於建立 `TicketRelations`。
+- Apps Script 需更新以支援 CS 送出後立即回傳 `relatedApAlreadyChecked` 判斷。
+
+---
+
 ## 2026-09-06 AP 金額千分位與簽核欄位調整
 
 ### 已完成調整
