@@ -205,8 +205,8 @@ function submitApplication_(ss, payload) {
   var now = new Date();
   var formData = payload.formData || {};
   var applicationNumber = generateApplicationNumber_(ss, payload.formType, payload.department, now);
-  var relatedApAlreadyChecked = String(payload.formType || '').toUpperCase() === 'CS' &&
-    findRelatedPriorApTicket_(ss, formData.related_ticket || formData.relatedTicket || '', now);
+  var relatedPriorCheckText = findRelatedPriorCheckText_(ss, payload.formType, formData.related_ticket || formData.relatedTicket || '', now);
+  var relatedApAlreadyChecked = relatedPriorCheckText === '簽呈單已查詢';
   var amlStatus = syncAmlInvestigation_(ss, {
     createdAt: now,
     formType: payload.formType,
@@ -218,6 +218,7 @@ function submitApplication_(ss, payload) {
     ownerName: formData.ext_company_owner || ''
   });
   amlStatus.relatedApAlreadyChecked = relatedApAlreadyChecked;
+  amlStatus.relatedPriorCheckText = relatedPriorCheckText;
 
   var status = 'Submitted';
   if (formData.external_collab === '是') {
@@ -273,9 +274,12 @@ function submitApplication_(ss, payload) {
   return { success: true, applicationNumber: applicationNumber, amlStatus: amlStatus };
 }
 
-function findRelatedPriorApTicket_(ss, relatedTicketValue, currentCreatedAt) {
+function findRelatedPriorCheckText_(ss, formType, relatedTicketValue, currentCreatedAt) {
+  var normalizedFormType = String(formType || '').toUpperCase();
+  if (['CS', 'RD'].indexOf(normalizedFormType) < 0) return '';
+
   var relatedIds = parseRelatedTicketIds_(relatedTicketValue);
-  if (!relatedIds.length) return false;
+  if (!relatedIds.length) return '';
 
   var relatedLookup = {};
   relatedIds.forEach(function(id) {
@@ -284,23 +288,29 @@ function findRelatedPriorApTicket_(ss, relatedTicketValue, currentCreatedAt) {
 
   var sheet = ensureTicketsSheet_(ss);
   var rows = sheet.getDataRange().getValues();
-  if (rows.length < 2) return false;
+  if (rows.length < 2) return '';
 
   var indexes = mapHeaderIndexes_(rows[0]);
   var ticketIndex = indexes['TicketID'];
   var formTypeIndex = indexes['FormType'];
   var createdAtIndex = indexes['CreatedAt'];
-  if (ticketIndex == null || formTypeIndex == null || createdAtIndex == null) return false;
+  if (ticketIndex == null || formTypeIndex == null || createdAtIndex == null) return '';
 
   var currentTime = parseTaipeiDateTime_(currentCreatedAt).getTime();
+  var hasPriorAp = false;
+  var hasPriorPurchaseRequest = false;
   for (var i = 1; i < rows.length; i++) {
     var ticketId = String(rows[i][ticketIndex] || '').trim();
     if (!relatedLookup[ticketId]) continue;
-    if (String(rows[i][formTypeIndex] || '').trim().toUpperCase() !== 'AP') continue;
     var relatedTime = parseTaipeiDateTime_(rows[i][createdAtIndex]).getTime();
-    if (!isNaN(relatedTime) && !isNaN(currentTime) && relatedTime <= currentTime) return true;
+    if (isNaN(relatedTime) || isNaN(currentTime) || relatedTime > currentTime) continue;
+    var relatedFormType = String(rows[i][formTypeIndex] || '').trim().toUpperCase();
+    if (relatedFormType === 'AP') hasPriorAp = true;
+    if (['RD', 'PR', 'PO'].indexOf(relatedFormType) >= 0) hasPriorPurchaseRequest = true;
   }
-  return false;
+  if (hasPriorAp) return '簽呈單已查詢';
+  if (normalizedFormType === 'RD' && hasPriorPurchaseRequest) return '請/採購單已查詢';
+  return '';
 }
 
 function getUser_(ss, email) {

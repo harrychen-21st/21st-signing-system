@@ -592,23 +592,23 @@ const parseRelatedTicketIds = (value: unknown) =>
     .map((item) => item.trim())
     .filter((item, index, all) => item && all.indexOf(item) === index);
 
-const hasRelatedPriorApTicket = async (scriptUrl: string, relatedTicketValue: unknown, currentCreatedAt: Date) => {
+const findRelatedPriorCheckText = async (scriptUrl: string, formType: string, relatedTicketValue: unknown, currentCreatedAt: Date) => {
   const relatedIds = new Set(parseRelatedTicketIds(relatedTicketValue));
-  if (!relatedIds.size) return false;
+  if (!relatedIds.size) return '';
 
   try {
     const rows = await getOptionalSheetRows(scriptUrl, 'Tickets', ticketHeaders);
     const tickets = parseTicketRows(rows);
     const currentTime = currentCreatedAt.getTime();
-    return tickets.some((ticket) => (
-      relatedIds.has(ticket.id) &&
-      ticket.formType === 'AP' &&
-      parseSheetDateMs(ticket.createdAt) > 0 &&
-      parseSheetDateMs(ticket.createdAt) <= currentTime
+    const relatedTickets = tickets.filter((ticket) => (
+      relatedIds.has(ticket.id) && parseSheetDateMs(ticket.createdAt) > 0 && parseSheetDateMs(ticket.createdAt) <= currentTime
     ));
+    if (relatedTickets.some((ticket) => ticket.formType === 'AP')) return '簽呈單已查詢';
+    if (formType === 'RD' && relatedTickets.some((ticket) => ['RD', 'PR', 'PO'].includes(ticket.formType))) return '請/採購單已查詢';
+    return '';
   } catch (error) {
-    console.warn('Unable to check related AP ticket before submit:', error);
-    return false;
+    console.warn('Unable to check related prior ticket before submit:', error);
+    return '';
   }
 };
 
@@ -1203,21 +1203,21 @@ graph TD
 
 | 欄位 ID | 欄位名稱 | 欄位型態 | 必填 | 說明/動態顯示條件 |
 | :--- | :--- | :--- | :--- | :--- |
-| **related_ticket** | 相關單號 | 單行文字 | 否 | 搭配請/採購單號使用，便於勾稽 |
+| **related_ticket** | 相關單號(請/採購單or簽呈單) | 單行文字 | 否 | 搭配請/採購單、簽呈單或其他來源單號使用，便於勾稽 |
 | **amount** | 請款金額 | 數值 | 是 | 本次請款之實際新台幣金額 |
 | **external_collab** | 是否涉及外部合作廠商 | 下拉選單 | 是 | 可選擇「是」或「否」 |
 | **vendor_name** | 廠商名稱 | 單行文字 | 是 | 當「是否涉及外部合作廠商」為「否」時顯示 |
 | **ext_tax_id** | 統一編號/識別碼 | 單行文字 | 是 | 當「是否涉及外部合作廠商」為「是」時顯示，輸入後自動帶入廠商與負責人資料 |
 | **ext_company_name** | 廠商名稱/公司名稱 | 單行文字 | 是 | 當「是否涉及外部合作廠商」為「是」時顯示，自動由 API 帶入，可手動修改 |
 | **ext_company_owner** | 負責人姓名 | 單行文字 | 是 | 當「是否涉及外部合作廠商」為「是」時顯示，自動由 API 帶入，可手動修改 |
+| **applicant_related_party** | 是否為關係人 | 下拉選單 | 否 | 當「是否涉及外部合作廠商」選擇「是」時顯示，供申請人自評留痕；不取代 AML DB 查核結果 |
 | **payment_date** | 付款期限 | 日期 | 是 | 預計付款之日期 |
 | **payment_method** | 付款方式 | 下拉選單 | 是 | 可選擇「匯款」、「現金」或「已由申請人代墊」 |
 | **description** | 請款用途說明 | 多行文字 | 是 | 詳細說明本次請款之用途與明細 |
-| **attachment** | 檢附單據 | 單行文字 | 是 | 請貼上發票、收據或相關憑證之雲端/共享資料夾連結 |
-| **attachment_version_note** | 附件版本/補充說明 | 單行文字 | 否 | 若單據或憑證有多版，請補充版本或差異說明 |`,
+| **bankbook_cover_url** | 存摺封面檔案 | 單行文字 | 條件必填 | 付款方式為「匯款」時必填；請貼上可列印的圖片或檔案連結 |`,
         logicMarkdown: `# 請款單 (RD) 後台處理規則
 
-請款單用於請款紀錄、來源單號勾稽、附件管控與財務後台處理追蹤。
+請款單用於請款紀錄、來源單號勾稽、AML/關係人查核與財務後台處理追蹤；一般附件改回紙本流程，不於系統欄位收件。
 
 \`\`\`mermaid
 graph TD
@@ -1226,8 +1226,10 @@ graph TD
     Relation -- 是 --> Link[建立來源單號與 RD 關聯]
     Relation -- 否 --> Record[保存請款資料]
     Link --> Record
-    Record --> Attachment[記錄附件與連結警示]
-    Attachment --> Finance[財務/後台處理]
+    Record --> Check{涉及外部合作廠商?}
+    Check -- 是 --> AML[同步 AML / 關係人調查]
+    Check -- 否 --> Finance[財務/後台處理]
+    AML --> Finance
     Finance --> Done[完成結案並保留稽核軌跡]
 \`\`\`
 
@@ -1238,21 +1240,22 @@ graph TD
 | 單號紀錄 | 送出表單 | 產生 RD 單號並保存請款資料 |
 | 單號勾稽 | related_ticket 有值 | 建立來源單號至本請款單的關聯 |
 | AML/關係人調查 | 涉及外部合作廠商且有統編 | 同步 AML 調查資料並回寫查核結果 |
-| 附件檢查 | 附件欄位有值 | 記錄附件版本說明與連結檢查警示 |`,
+| 前置單已查詢 | related_ticket 對應較早 AP 或請/採購單 | RD 列印會簽文字顯示「簽呈單已查詢」或「請/採購單已查詢」 |
+| 匯款存摺封面 | payment_method == '匯款' | 要求提供存摺封面檔案連結，列印時作為後續頁面 |`,
         configJSON: {
           fields: [
-            { id: "related_ticket", label: "相關單號 (搭配請/採購單號)", type: "text", required: false },
+            { id: "related_ticket", label: "相關單號(請/採購單or簽呈單)", type: "text", required: false },
             { id: "amount", label: "請款金額", type: "number", required: true },
             { id: "external_collab", label: "是否涉及外部合作廠商", type: "select", options: ["否", "是"], required: true },
             { id: "vendor_name", label: "廠商名稱", type: "text", required: true, showIf: { field: "external_collab", value: "否" } },
             { id: "ext_tax_id", label: "統一編號/識別碼", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
             { id: "ext_company_name", label: "廠商名稱/公司名稱", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
             { id: "ext_company_owner", label: "負責人姓名", type: "text", required: true, showIf: { field: "external_collab", value: "是" } },
+            { id: "applicant_related_party", label: "是否為關係人", type: "select", options: ["否", "是"], required: false, showIf: { field: "external_collab", value: "是" } },
             { id: "payment_date", label: "付款期限", type: "date", required: true },
             { id: "payment_method", label: "付款方式", type: "select", options: ["匯款", "現金", "已由申請人代墊"], required: true },
             { id: "description", label: "請款用途說明", type: "textarea", required: true },
-            { id: "attachment", label: "檢附單據 (請貼上雲端/資料夾連結)", type: "text", required: true },
-            { id: "attachment_version_note", label: "附件版本/補充說明", type: "text", required: false }
+            { id: "bankbook_cover_url", label: "存摺封面檔案連結", type: "text", required: true, showIf: { field: "payment_method", value: "匯款" } }
           ]
         }
       },
@@ -1487,9 +1490,9 @@ graph TD
 
       const submittedAt = new Date();
       const formData = firstTicket.formData || {};
-      const relatedApAlreadyChecked = firstTicket.formType === 'CS'
-        ? await hasRelatedPriorApTicket(scriptUrl, formData.related_ticket || formData.relatedTicket || '', submittedAt)
-        : false;
+      const relatedPriorCheckText = ['CS', 'RD'].includes(firstTicket.formType)
+        ? await findRelatedPriorCheckText(scriptUrl, firstTicket.formType, formData.related_ticket || formData.relatedTicket || '', submittedAt)
+        : '';
       const attachmentChecks = await buildAttachmentChecks(formData);
       const result = await postToAppsScript(scriptUrl, {
         action: 'submitApplication',
@@ -1510,7 +1513,8 @@ graph TD
         applicationNumber: result.applicationNumber,
         amlStatus: {
           ...(result.amlStatus || {}),
-          relatedApAlreadyChecked: Boolean(result.amlStatus?.relatedApAlreadyChecked || relatedApAlreadyChecked)
+          relatedApAlreadyChecked: Boolean(result.amlStatus?.relatedApAlreadyChecked || relatedPriorCheckText === '簽呈單已查詢'),
+          relatedPriorCheckText: result.amlStatus?.relatedPriorCheckText || relatedPriorCheckText
         },
         attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === 'Warning' || item.warning)
       });

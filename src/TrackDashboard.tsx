@@ -133,18 +133,43 @@ const hasEarlierApRelation = (ticket: MyTicket) => {
   });
 };
 
-const deriveAmlCountersign = (amlResult?: string, rpResult?: string, relatedApAlreadyChecked = false) => {
+const deriveRelatedPriorCheckText = (ticket: MyTicket) => {
+  if (!['CS', 'RD'].includes(ticket.formType)) return '';
+  const ticketCreatedAt = parseLocalDateMs(ticket.createdAt);
+  if (!ticketCreatedAt) return '';
+
+  const linkedTypes = new Set(
+    (ticket.relations || [])
+      .map((relation) => relation.linkedTicket)
+      .filter((linked): linked is TicketBasic => Boolean(linked))
+      .filter((linked) => {
+        const linkedCreatedAt = parseLocalDateMs(linked.createdAt);
+        return linkedCreatedAt > 0 && linkedCreatedAt <= ticketCreatedAt;
+      })
+      .map((linked) => linked.formType)
+  );
+
+  if (linkedTypes.has('AP')) return '簽呈單已查詢';
+  if (ticket.formType === 'RD' && ['RD', 'PR', 'PO'].some((formType) => linkedTypes.has(formType))) return '請/採購單已查詢';
+  return '';
+};
+
+const deriveAmlCountersign = (amlResult?: string, rpResult?: string, relatedPriorCheckText = '') => {
   const passedAmlText = '沒有找到任何紀錄，OK';
   const nonRelatedText = '經管理處查核非屬關係人交易，且經第三方確認查無反社會或暴力團體相關負面新聞';
   const relatedPassedText = '經管理處查核為關係人交易且已過關係人會議，且經第三方確認查無反社會或暴力團體相關負面新聞';
   const aml = String(amlResult || '').trim();
   const rp = String(rpResult || '').trim();
 
-  if (relatedApAlreadyChecked) return { mode: 'text' as const, text: '簽呈單已查詢' };
+  if (relatedPriorCheckText) return { mode: 'text' as const, text: relatedPriorCheckText };
   if (aml === passedAmlText && rp === '否') return { mode: 'text' as const, text: nonRelatedText };
   if (aml === passedAmlText && rp.includes('已過關係人會議')) return { mode: 'text' as const, text: relatedPassedText };
   return { mode: 'checkbox' as const, text: relatedPassedText };
 };
+
+const isImageUrl = (value: unknown) => (
+  /^https?:\/\/.+\.(png|jpe?g|gif|webp)(\?.*)?$/i.test(String(value || '').trim())
+);
 
 const deriveTicketStateFromLogs = (logs: AuditLog[]) => {
   const latestTerminalLog = [...logs].reverse().find((log) => ['Completed', 'Approved', 'Rejected'].includes(log.action));
@@ -182,6 +207,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
   const formFields = Object.entries(ticket.formData || {}).filter(([k]) => {
     if (hiddenPrintableFormFields.has(k)) return false;
     if (ticket.formType === 'CS' && (k === 'attachment' || k === 'attachment_version_note')) return false;
+    if (ticket.formType === 'RD' && (k === 'attachment' || k === 'attachment_version_note' || k === 'bankbook_cover_url')) return false;
     return true;
   });
   
@@ -195,7 +221,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       ext_company_owner: '外部公司負責人',
       ext_tax_id: '統編',
       applicant_related_party: '是否為關係人',
-      related_ticket: '相關單號(如簽呈等)',
+      related_ticket: ticket.formType === 'RD' ? '相關單號(請/採購單or簽呈單)' : '相關單號(如簽呈等)',
       related_case_no: '相關案件編號',
       estimated_amount: '預估金額',
       subject: '主旨',
@@ -208,6 +234,8 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       rd_vendor: '受款對象/廠商名',
       rd_deadline: '期望付款日期',
       rd_pay_method: '付款方式',
+      payment_method: '付款方式',
+      bankbook_cover_url: '存摺封面檔案',
       rd_desc: '用途說明',
       rd_file_count: '附件數量',
       cs_ref_id: '對應來源單號',
@@ -218,12 +246,22 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
     return labels[key] || key;
   };
   const needsAdminCountersign = ticket.formData?.external_collab === '是';
-  const amlCountersign = deriveAmlCountersign(ticket.amlResult, ticket.rpResult, hasEarlierApRelation(ticket));
+  const amlCountersign = deriveAmlCountersign(
+    ticket.amlResult,
+    ticket.rpResult,
+    hasEarlierApRelation(ticket) ? '簽呈單已查詢' : deriveRelatedPriorCheckText(ticket)
+  );
   const signerRoles = ticket.formType === 'AP'
     ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
+    : ticket.formType === 'RD'
+      ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
     : ticket.formType === 'CS'
       ? ['總經理', '財務處主管', '單位本部長', '單位處主管', '申請人']
       : ['', '', ''];
+  const financeRecordRoles = ['財務經理放行', '財務覆核', '出納編輯', '會計確認', '其他'];
+  const bankbookCoverUrl = String(ticket.formData?.bankbook_cover_url || '').trim();
+  const hasBankbookAppendix = ticket.formType === 'RD' && ticket.formData?.payment_method === '匯款' && bankbookCoverUrl;
+  const pageTotal = hasBankbookAppendix ? 2 : 1;
 
   const formNameMapping: Record<string, string> = {
     'AP': '簽呈單 (AP)',
@@ -232,6 +270,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
   };
 
   return (
+    <>
     <div className="hidden print:block p-4 bg-white text-black min-h-screen text-[11px]">
       <div className="text-center mb-4 border-b-2 border-black pb-3">
         <h1 className="text-3xl font-bold">{formNameMapping[ticket.formType] || ticket.formType}</h1>
@@ -261,7 +300,12 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
             {formFields.map(([key, value]) => (
               <tr key={key} className="border-b border-gray-200">
                 <td className="py-2 px-4 font-bold bg-gray-100 w-1/3">{getLabel(key)}</td>
-                <td className="py-2 px-4">{displayFieldValue(key, value)}</td>
+                <td className="py-2 px-4">
+                  {displayFieldValue(key, value)}
+                  {ticket.formType === 'RD' && key === 'description' && (
+                    <p className="mt-2 text-[10px] text-gray-500">$5,000元以上須檢附請/採購單正本或簽呈單正本</p>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -284,7 +328,7 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
 
       <div className="mb-4">
         <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">簽核欄位</h2>
-        <div className={`grid border border-gray-300 ${ticket.formType === 'AP' || ticket.formType === 'CS' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+        <div className={`grid border border-gray-300 ${['AP', 'RD', 'CS'].includes(ticket.formType) ? 'grid-cols-5' : 'grid-cols-3'}`}>
           {signerRoles.map((role, index) => (
             <div key={`${role}-${index}`} className="min-h-[84px] border-r border-gray-300 px-2 py-1.5 last:border-r-0">
               {role && <div className="mb-1 text-center text-[11px] font-bold text-gray-900">{role}</div>}
@@ -297,6 +341,24 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
           ))}
         </div>
       </div>
+
+      {ticket.formType === 'RD' && (
+        <div className="mb-4">
+          <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">財會記錄欄位</h2>
+          <div className="grid grid-cols-5 border border-gray-300">
+            {financeRecordRoles.map((role) => (
+              <div key={role} className="min-h-[78px] border-r border-gray-300 px-2 py-1.5 last:border-r-0">
+                <div className="mb-1 text-center text-[11px] font-bold text-gray-900">{role}</div>
+                <div className="h-8"></div>
+                <div className="border-t border-gray-300 pt-1.5 text-left text-[10px] leading-4 text-gray-700">
+                  <div>簽核:</div>
+                  <div>日期:</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <h2 className="text-xl font-bold border-b border-gray-300 pb-2 mb-4">處理紀錄</h2>
@@ -331,8 +393,29 @@ const PrintableTicket = ({ ticket }: { ticket: MyTicket }) => {
       <div className="mt-8 pt-4 border-t border-gray-400 text-center text-sm text-gray-500">
         此為系統自動產生之數位軌跡證明・列印時間：{new Date().toLocaleString()}
       </div>
-      <div className="print-page-number">第 1 頁 / 共 1 頁</div>
+      <div className="print-page-number">第 1 頁 / 共 {pageTotal} 頁</div>
     </div>
+    {hasBankbookAppendix && (
+      <div className="hidden print:block p-4 bg-white text-black min-h-screen text-[11px]">
+        <div className="break-before-page">
+          <div className="mb-4 border-b-2 border-black pb-3">
+            <h1 className="text-xl font-bold">存摺封面附件</h1>
+            <p className="text-sm mt-2 text-gray-600">系統單號：{ticket.id}</p>
+          </div>
+          {isImageUrl(bankbookCoverUrl) ? (
+            <img src={bankbookCoverUrl} alt="存摺封面" className="max-h-[240mm] w-full object-contain" />
+          ) : (
+            <div className="border border-gray-300 p-4 leading-6">
+              <p className="font-bold">存摺封面檔案連結</p>
+              <p className="mt-2 break-all">{bankbookCoverUrl}</p>
+              <p className="mt-4 text-gray-500">此連結非圖片格式或無法由瀏覽器直接嵌入時，請於紙本後續頁檢附檔案列印本。</p>
+            </div>
+          )}
+          <div className="print-page-number">第 2 頁 / 共 2 頁</div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
 

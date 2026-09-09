@@ -1,5 +1,25 @@
 # 內部簽核系統 - 開發工作紀錄 (AI Work Record)
 
+## 2026-09-09 RD 請款單欄位與列印/PDF 調整
+
+### 已完成調整
+- RD `related_ticket` 顯示名稱改為 `相關單號(請/採購單or簽呈單)`，欄位 ID 維持不變，確保既有單號勾稽與 `TicketRelations` 不受影響。
+- 請款金額沿用系統金額千分位顯示規則；資料庫原始值仍不加逗號。
+- RD 在 `external_collab = 是` 時新增 `applicant_related_party` 是否為關係人，僅作為申請人自評留痕，不取代 AML DB 查核結果。
+- RD 涉及外部合作廠商時沿用 AP 的 AML/關係人調查會簽文字規則。
+- 若 RD 的 `related_ticket` 對應到較早建立的 AP 簽呈單，列印/PDF 的 AML/關係人會簽文字顯示 `簽呈單已查詢`；若對應到較早 RD/PR/PO 類請款或採購單，顯示 `請/採購單已查詢`。
+- RD 簽核欄位套用 AP 版面格式，並新增財會記錄欄位：`財務經理放行`、`財務覆核`、`出納編輯`、`會計確認`、`其他`。
+- RD 一般附件欄位已從表單定義移除；歷史 RD 資料列印時也不再顯示舊的附件欄位。
+- RD 內容說明下方新增備註：`$5,000元以上須檢附請/採購單正本或簽呈單正本`。
+- RD 付款方式為 `匯款` 時，新增條件必填 `bankbook_cover_url` 存摺封面檔案連結；列印時會作為後續頁面一起輸出，若連結為圖片格式則直接嵌入，否則列印檔案連結供紙本檢附核對。
+
+### DB 影響
+- 不新增 `Tickets` 表頭；`applicant_related_party` 與 `bankbook_cover_url` 存於既有 `FormData_JSON`。
+- `related_ticket` 欄位 ID 不變，仍用於建立 `TicketRelations`。
+- Apps Script 需更新以支援 RD/CS 送出後立即回傳 `relatedPriorCheckText` 判斷。
+
+---
+
 ## 2026-09-09 CS 用印申請單欄位與列印/PDF 調整
 
 ### 已完成調整

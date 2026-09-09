@@ -459,17 +459,20 @@ const parseSheetDateMs = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 const parseRelatedTicketIds = (value) => String(value || "").split(/[\s,;，、]+/).map((item) => item.trim()).filter((item, index, all) => item && all.indexOf(item) === index);
-const hasRelatedPriorApTicket = async (scriptUrl, relatedTicketValue, currentCreatedAt) => {
+const findRelatedPriorCheckText = async (scriptUrl, formType, relatedTicketValue, currentCreatedAt) => {
   const relatedIds = new Set(parseRelatedTicketIds(relatedTicketValue));
-  if (!relatedIds.size) return false;
+  if (!relatedIds.size) return "";
   try {
     const rows = await getOptionalSheetRows(scriptUrl, "Tickets", ticketHeaders);
     const tickets = parseTicketRows(rows);
     const currentTime = currentCreatedAt.getTime();
-    return tickets.some((ticket) => relatedIds.has(ticket.id) && ticket.formType === "AP" && parseSheetDateMs(ticket.createdAt) > 0 && parseSheetDateMs(ticket.createdAt) <= currentTime);
+    const relatedTickets = tickets.filter((ticket) => relatedIds.has(ticket.id) && parseSheetDateMs(ticket.createdAt) > 0 && parseSheetDateMs(ticket.createdAt) <= currentTime);
+    if (relatedTickets.some((ticket) => ticket.formType === "AP")) return "\u7C3D\u5448\u55AE\u5DF2\u67E5\u8A62";
+    if (formType === "RD" && relatedTickets.some((ticket) => ["RD", "PR", "PO"].includes(ticket.formType))) return "\u8ACB/\u63A1\u8CFC\u55AE\u5DF2\u67E5\u8A62";
+    return "";
   } catch (error) {
-    console.warn("Unable to check related AP ticket before submit:", error);
-    return false;
+    console.warn("Unable to check related prior ticket before submit:", error);
+    return "";
   }
 };
 const escapeXml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -983,21 +986,21 @@ graph TD
 
 | \u6B04\u4F4D ID | \u6B04\u4F4D\u540D\u7A31 | \u6B04\u4F4D\u578B\u614B | \u5FC5\u586B | \u8AAA\u660E/\u52D5\u614B\u986F\u793A\u689D\u4EF6 |
 | :--- | :--- | :--- | :--- | :--- |
-| **related_ticket** | \u76F8\u95DC\u55AE\u865F | \u55AE\u884C\u6587\u5B57 | \u5426 | \u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F\u4F7F\u7528\uFF0C\u4FBF\u65BC\u52FE\u7A3D |
+| **related_ticket** | \u76F8\u95DC\u55AE\u865F(\u8ACB/\u63A1\u8CFC\u55AEor\u7C3D\u5448\u55AE) | \u55AE\u884C\u6587\u5B57 | \u5426 | \u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u3001\u7C3D\u5448\u55AE\u6216\u5176\u4ED6\u4F86\u6E90\u55AE\u865F\u4F7F\u7528\uFF0C\u4FBF\u65BC\u52FE\u7A3D |
 | **amount** | \u8ACB\u6B3E\u91D1\u984D | \u6578\u503C | \u662F | \u672C\u6B21\u8ACB\u6B3E\u4E4B\u5BE6\u969B\u65B0\u53F0\u5E63\u91D1\u984D |
 | **external_collab** | \u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546 | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u662F\u300D\u6216\u300C\u5426\u300D |
 | **vendor_name** | \u5EE0\u5546\u540D\u7A31 | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u70BA\u300C\u5426\u300D\u6642\u986F\u793A |
 | **ext_tax_id** | \u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u70BA\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u8F38\u5165\u5F8C\u81EA\u52D5\u5E36\u5165\u5EE0\u5546\u8207\u8CA0\u8CAC\u4EBA\u8CC7\u6599 |
 | **ext_company_name** | \u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31 | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u70BA\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |
 | **ext_company_owner** | \u8CA0\u8CAC\u4EBA\u59D3\u540D | \u55AE\u884C\u6587\u5B57 | \u662F | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u70BA\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u81EA\u52D5\u7531 API \u5E36\u5165\uFF0C\u53EF\u624B\u52D5\u4FEE\u6539 |
+| **applicant_related_party** | \u662F\u5426\u70BA\u95DC\u4FC2\u4EBA | \u4E0B\u62C9\u9078\u55AE | \u5426 | \u7576\u300C\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u300D\u9078\u64C7\u300C\u662F\u300D\u6642\u986F\u793A\uFF0C\u4F9B\u7533\u8ACB\u4EBA\u81EA\u8A55\u7559\u75D5\uFF1B\u4E0D\u53D6\u4EE3 AML DB \u67E5\u6838\u7D50\u679C |
 | **payment_date** | \u4ED8\u6B3E\u671F\u9650 | \u65E5\u671F | \u662F | \u9810\u8A08\u4ED8\u6B3E\u4E4B\u65E5\u671F |
 | **payment_method** | \u4ED8\u6B3E\u65B9\u5F0F | \u4E0B\u62C9\u9078\u55AE | \u662F | \u53EF\u9078\u64C7\u300C\u532F\u6B3E\u300D\u3001\u300C\u73FE\u91D1\u300D\u6216\u300C\u5DF2\u7531\u7533\u8ACB\u4EBA\u4EE3\u588A\u300D |
 | **description** | \u8ACB\u6B3E\u7528\u9014\u8AAA\u660E | \u591A\u884C\u6587\u5B57 | \u662F | \u8A73\u7D30\u8AAA\u660E\u672C\u6B21\u8ACB\u6B3E\u4E4B\u7528\u9014\u8207\u660E\u7D30 |
-| **attachment** | \u6AA2\u9644\u55AE\u64DA | \u55AE\u884C\u6587\u5B57 | \u662F | \u8ACB\u8CBC\u4E0A\u767C\u7968\u3001\u6536\u64DA\u6216\u76F8\u95DC\u6191\u8B49\u4E4B\u96F2\u7AEF/\u5171\u4EAB\u8CC7\u6599\u593E\u9023\u7D50 |
-| **attachment_version_note** | \u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E | \u55AE\u884C\u6587\u5B57 | \u5426 | \u82E5\u55AE\u64DA\u6216\u6191\u8B49\u6709\u591A\u7248\uFF0C\u8ACB\u88DC\u5145\u7248\u672C\u6216\u5DEE\u7570\u8AAA\u660E |`,
+| **bankbook_cover_url** | \u5B58\u647A\u5C01\u9762\u6A94\u6848 | \u55AE\u884C\u6587\u5B57 | \u689D\u4EF6\u5FC5\u586B | \u4ED8\u6B3E\u65B9\u5F0F\u70BA\u300C\u532F\u6B3E\u300D\u6642\u5FC5\u586B\uFF1B\u8ACB\u8CBC\u4E0A\u53EF\u5217\u5370\u7684\u5716\u7247\u6216\u6A94\u6848\u9023\u7D50 |`,
         logicMarkdown: `# \u8ACB\u6B3E\u55AE (RD) \u5F8C\u53F0\u8655\u7406\u898F\u5247
 
-\u8ACB\u6B3E\u55AE\u7528\u65BC\u8ACB\u6B3E\u7D00\u9304\u3001\u4F86\u6E90\u55AE\u865F\u52FE\u7A3D\u3001\u9644\u4EF6\u7BA1\u63A7\u8207\u8CA1\u52D9\u5F8C\u53F0\u8655\u7406\u8FFD\u8E64\u3002
+\u8ACB\u6B3E\u55AE\u7528\u65BC\u8ACB\u6B3E\u7D00\u9304\u3001\u4F86\u6E90\u55AE\u865F\u52FE\u7A3D\u3001AML/\u95DC\u4FC2\u4EBA\u67E5\u6838\u8207\u8CA1\u52D9\u5F8C\u53F0\u8655\u7406\u8FFD\u8E64\uFF1B\u4E00\u822C\u9644\u4EF6\u6539\u56DE\u7D19\u672C\u6D41\u7A0B\uFF0C\u4E0D\u65BC\u7CFB\u7D71\u6B04\u4F4D\u6536\u4EF6\u3002
 
 \`\`\`mermaid
 graph TD
@@ -1006,8 +1009,10 @@ graph TD
     Relation -- \u662F --> Link[\u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u8207 RD \u95DC\u806F]
     Relation -- \u5426 --> Record[\u4FDD\u5B58\u8ACB\u6B3E\u8CC7\u6599]
     Link --> Record
-    Record --> Attachment[\u8A18\u9304\u9644\u4EF6\u8207\u9023\u7D50\u8B66\u793A]
-    Attachment --> Finance[\u8CA1\u52D9/\u5F8C\u53F0\u8655\u7406]
+    Record --> Check{\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546?}
+    Check -- \u662F --> AML[\u540C\u6B65 AML / \u95DC\u4FC2\u4EBA\u8ABF\u67E5]
+    Check -- \u5426 --> Finance[\u8CA1\u52D9/\u5F8C\u53F0\u8655\u7406]
+    AML --> Finance
     Finance --> Done[\u5B8C\u6210\u7D50\u6848\u4E26\u4FDD\u7559\u7A3D\u6838\u8ECC\u8DE1]
 \`\`\`
 
@@ -1018,21 +1023,22 @@ graph TD
 | \u55AE\u865F\u7D00\u9304 | \u9001\u51FA\u8868\u55AE | \u7522\u751F RD \u55AE\u865F\u4E26\u4FDD\u5B58\u8ACB\u6B3E\u8CC7\u6599 |
 | \u55AE\u865F\u52FE\u7A3D | related_ticket \u6709\u503C | \u5EFA\u7ACB\u4F86\u6E90\u55AE\u865F\u81F3\u672C\u8ACB\u6B3E\u55AE\u7684\u95DC\u806F |
 | AML/\u95DC\u4FC2\u4EBA\u8ABF\u67E5 | \u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546\u4E14\u6709\u7D71\u7DE8 | \u540C\u6B65 AML \u8ABF\u67E5\u8CC7\u6599\u4E26\u56DE\u5BEB\u67E5\u6838\u7D50\u679C |
-| \u9644\u4EF6\u6AA2\u67E5 | \u9644\u4EF6\u6B04\u4F4D\u6709\u503C | \u8A18\u9304\u9644\u4EF6\u7248\u672C\u8AAA\u660E\u8207\u9023\u7D50\u6AA2\u67E5\u8B66\u793A |`,
+| \u524D\u7F6E\u55AE\u5DF2\u67E5\u8A62 | related_ticket \u5C0D\u61C9\u8F03\u65E9 AP \u6216\u8ACB/\u63A1\u8CFC\u55AE | RD \u5217\u5370\u6703\u7C3D\u6587\u5B57\u986F\u793A\u300C\u7C3D\u5448\u55AE\u5DF2\u67E5\u8A62\u300D\u6216\u300C\u8ACB/\u63A1\u8CFC\u55AE\u5DF2\u67E5\u8A62\u300D |
+| \u532F\u6B3E\u5B58\u647A\u5C01\u9762 | payment_method == '\u532F\u6B3E' | \u8981\u6C42\u63D0\u4F9B\u5B58\u647A\u5C01\u9762\u6A94\u6848\u9023\u7D50\uFF0C\u5217\u5370\u6642\u4F5C\u70BA\u5F8C\u7E8C\u9801\u9762 |`,
         configJSON: {
           fields: [
-            { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F (\u642D\u914D\u8ACB/\u63A1\u8CFC\u55AE\u865F)", type: "text", required: false },
+            { id: "related_ticket", label: "\u76F8\u95DC\u55AE\u865F(\u8ACB/\u63A1\u8CFC\u55AEor\u7C3D\u5448\u55AE)", type: "text", required: false },
             { id: "amount", label: "\u8ACB\u6B3E\u91D1\u984D", type: "number", required: true },
             { id: "external_collab", label: "\u662F\u5426\u6D89\u53CA\u5916\u90E8\u5408\u4F5C\u5EE0\u5546", type: "select", options: ["\u5426", "\u662F"], required: true },
             { id: "vendor_name", label: "\u5EE0\u5546\u540D\u7A31", type: "text", required: true, showIf: { field: "external_collab", value: "\u5426" } },
             { id: "ext_tax_id", label: "\u7D71\u4E00\u7DE8\u865F/\u8B58\u5225\u78BC", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
             { id: "ext_company_name", label: "\u5EE0\u5546\u540D\u7A31/\u516C\u53F8\u540D\u7A31", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
             { id: "ext_company_owner", label: "\u8CA0\u8CAC\u4EBA\u59D3\u540D", type: "text", required: true, showIf: { field: "external_collab", value: "\u662F" } },
+            { id: "applicant_related_party", label: "\u662F\u5426\u70BA\u95DC\u4FC2\u4EBA", type: "select", options: ["\u5426", "\u662F"], required: false, showIf: { field: "external_collab", value: "\u662F" } },
             { id: "payment_date", label: "\u4ED8\u6B3E\u671F\u9650", type: "date", required: true },
             { id: "payment_method", label: "\u4ED8\u6B3E\u65B9\u5F0F", type: "select", options: ["\u532F\u6B3E", "\u73FE\u91D1", "\u5DF2\u7531\u7533\u8ACB\u4EBA\u4EE3\u588A"], required: true },
             { id: "description", label: "\u8ACB\u6B3E\u7528\u9014\u8AAA\u660E", type: "textarea", required: true },
-            { id: "attachment", label: "\u6AA2\u9644\u55AE\u64DA (\u8ACB\u8CBC\u4E0A\u96F2\u7AEF/\u8CC7\u6599\u593E\u9023\u7D50)", type: "text", required: true },
-            { id: "attachment_version_note", label: "\u9644\u4EF6\u7248\u672C/\u88DC\u5145\u8AAA\u660E", type: "text", required: false }
+            { id: "bankbook_cover_url", label: "\u5B58\u647A\u5C01\u9762\u6A94\u6848\u9023\u7D50", type: "text", required: true, showIf: { field: "payment_method", value: "\u532F\u6B3E" } }
           ]
         }
       },
@@ -1243,7 +1249,7 @@ graph TD
       }
       const submittedAt = /* @__PURE__ */ new Date();
       const formData = firstTicket.formData || {};
-      const relatedApAlreadyChecked = firstTicket.formType === "CS" ? await hasRelatedPriorApTicket(scriptUrl, formData.related_ticket || formData.relatedTicket || "", submittedAt) : false;
+      const relatedPriorCheckText = ["CS", "RD"].includes(firstTicket.formType) ? await findRelatedPriorCheckText(scriptUrl, firstTicket.formType, formData.related_ticket || formData.relatedTicket || "", submittedAt) : "";
       const attachmentChecks = await buildAttachmentChecks(formData);
       const result = await postToAppsScript(scriptUrl, {
         action: "submitApplication",
@@ -1263,7 +1269,8 @@ graph TD
         applicationNumber: result.applicationNumber,
         amlStatus: {
           ...result.amlStatus || {},
-          relatedApAlreadyChecked: Boolean(result.amlStatus?.relatedApAlreadyChecked || relatedApAlreadyChecked)
+          relatedApAlreadyChecked: Boolean(result.amlStatus?.relatedApAlreadyChecked || relatedPriorCheckText === "\u7C3D\u5448\u55AE\u5DF2\u67E5\u8A62"),
+          relatedPriorCheckText: result.amlStatus?.relatedPriorCheckText || relatedPriorCheckText
         },
         attachmentWarnings: attachmentChecks.filter((item) => item.checkStatus === "Warning" || item.warning)
       });

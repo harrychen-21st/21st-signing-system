@@ -424,7 +424,7 @@ export default function ApproverDashboard({ user }: { user: any }) {
                   <div>商家名稱：{valueOf(ticket, 'ext_company_name')}</div>
                   <div>負責人姓名：{valueOf(ticket, 'ext_company_owner')}</div>
                   <div>是否涉及外部公司：{valueOf(ticket, 'external_collab')}</div>
-                  {ticket.formType === 'AP' && <div>申請人自評關係人：{valueOf(ticket, 'applicant_related_party')}</div>}
+                  {['AP', 'RD'].includes(ticket.formType) && <div>申請人自評關係人：{valueOf(ticket, 'applicant_related_party')}</div>}
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 pt-2">

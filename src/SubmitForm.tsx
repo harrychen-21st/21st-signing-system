@@ -36,6 +36,7 @@ type SubmittedTicket = {
     amlResult?: string;
     rpResult?: string;
     relatedApAlreadyChecked?: boolean;
+    relatedPriorCheckText?: string;
     skipped?: boolean;
   };
   attachmentWarnings?: {
@@ -65,13 +66,14 @@ const fieldLabels: Record<string, string> = {
   description: '內容說明',
   attachment: '附件',
   attachment_version_note: '附件版本/補充說明',
-  related_ticket: '相關單號(如簽呈等)',
+  related_ticket: '相關單號',
   related_case_no: '相關案件編號',
   estimated_amount: '預估金額',
   amount: '金額',
   vendor_name: '廠商名稱',
   payment_date: '付款期限',
   payment_method: '付款方式',
+  bankbook_cover_url: '存摺封面檔案',
   seal_type: '用印類別',
   seal_size: '印章需求',
   external_collab: '是否涉及外部公司',
@@ -141,6 +143,14 @@ function displayFieldValue(key: string, value: unknown) {
   return isAmountField(key) ? formatAmount(value) : displayValue(value);
 }
 
+function getFieldLabel(formType: string, key: string) {
+  if (key === 'related_ticket') {
+    if (formType === 'CS') return '相關單號(如簽呈等)';
+    if (formType === 'RD') return '相關單號(請/採購單or簽呈單)';
+  }
+  return fieldLabels[key] || key;
+}
+
 function toggleMultiValue(currentValue: unknown, option: string) {
   const values = String(currentValue || '')
     .split('、')
@@ -162,7 +172,11 @@ function deriveAmlCountersign(amlStatus?: SubmittedTicket['amlStatus']) {
   const relatedPassedText = '經管理處查核為關係人交易且已過關係人會議，且經第三方確認查無反社會或暴力團體相關負面新聞';
   const amlResult = normalizeCheckText(amlStatus?.amlResult);
   const rpResult = normalizeCheckText(amlStatus?.rpResult);
+  const relatedPriorCheckText = normalizeCheckText(amlStatus?.relatedPriorCheckText);
 
+  if (relatedPriorCheckText) {
+    return { mode: 'text' as const, text: relatedPriorCheckText };
+  }
   if (amlStatus?.relatedApAlreadyChecked) {
     return { mode: 'text' as const, text: '簽呈單已查詢' };
   }
@@ -180,11 +194,16 @@ function isLongPrintField(key: string) {
   return key === 'description' || label.includes('說明') || label.includes('用途') || label.includes('內容');
 }
 
+function isImageUrl(value: unknown) {
+  return /^https?:\/\/.+\.(png|jpe?g|gif|webp)(\?.*)?$/i.test(String(value || '').trim());
+}
+
 function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const hiddenPrintFields = new Set(['ALWAYS', 'subject', 'email', 'Email', 'EMAIL', 'applicantEmail', 'applicant_email', 'expense_category', 'related_case_no', 'estimated_amount']);
   const visibleEntries = Object.entries(ticket.formData).filter(([key]) => {
     if (hiddenPrintFields.has(key)) return false;
     if (ticket.formType === 'CS' && (key === 'attachment' || key === 'attachment_version_note')) return false;
+    if (ticket.formType === 'RD' && (key === 'attachment' || key === 'attachment_version_note' || key === 'bankbook_cover_url')) return false;
     return true;
   });
   const formTypeDisplay = ticket.formTypeName || ticket.formType;
@@ -193,11 +212,18 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
   const handlingUnitText = ticket.formType === 'CS' ? '管理處(法務)：請補充法務確認或 Email 紀錄' : '';
   const signerRoles = ticket.formType === 'AP'
     ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
+    : ticket.formType === 'RD'
+      ? ['總經理', '管理本部長', '單位本部長', '單位處主管', '申請人']
     : ticket.formType === 'CS'
       ? ['總經理', '財務處主管', '單位本部長', '單位處主管', '申請人']
       : ['', '', ''];
+  const financeRecordRoles = ['財務經理放行', '財務覆核', '出納編輯', '會計確認', '其他'];
+  const bankbookCoverUrl = String(ticket.formData.bankbook_cover_url || '').trim();
+  const hasBankbookAppendix = ticket.formType === 'RD' && ticket.formData.payment_method === '匯款' && bankbookCoverUrl;
+  const pageTotal = hasBankbookAppendix ? 2 : 1;
 
   return (
+    <>
     <div className="print-page hidden print:block bg-white text-slate-950 text-[11px] leading-relaxed">
       <header className="mb-3 border-b-2 border-slate-950 pb-2">
         <div className="flex items-start justify-between gap-6">
@@ -264,10 +290,13 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
                     : 'border-b border-slate-200 pb-1.5'
                 }
               >
-                <div className="text-[10px] font-semibold text-slate-500">{fieldLabels[key] || key}</div>
+                <div className="text-[10px] font-semibold text-slate-500">{getFieldLabel(ticket.formType, key)}</div>
                 <div className={longField ? 'mt-1 min-h-20 whitespace-pre-wrap break-words font-medium leading-5 text-slate-900' : 'min-h-5 whitespace-pre-wrap break-words font-medium text-slate-900'}>
                   {displayFieldValue(key, value)}
                 </div>
+                {ticket.formType === 'RD' && key === 'description' && (
+                  <p className="mt-2 text-[10px] text-slate-500">$5,000元以上須檢附請/採購單正本或簽呈單正本</p>
+                )}
               </div>
             );
           })}
@@ -314,7 +343,7 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
 
       <section className="print-section mb-3">
         <h2 className="mb-2 text-sm font-bold text-slate-900">簽核欄位</h2>
-        <div className={`grid overflow-hidden rounded-md border border-slate-300 ${ticket.formType === 'AP' || ticket.formType === 'CS' ? 'grid-cols-5' : 'grid-cols-3'}`}>
+        <div className={`grid overflow-hidden rounded-md border border-slate-300 ${['AP', 'RD', 'CS'].includes(ticket.formType) ? 'grid-cols-5' : 'grid-cols-3'}`}>
           {signerRoles.map((role, index) => (
             <div key={`${role}-${index}`} className="min-h-[84px] border-r border-slate-300 px-2 py-1.5 last:border-r-0">
               {role && <div className="mb-1 text-center text-[11px] font-bold text-slate-900">{role}</div>}
@@ -328,8 +357,47 @@ function PrintableApplication({ ticket }: { ticket: SubmittedTicket }) {
         </div>
       </section>
 
-      <div className="print-page-number">第 1 頁 / 共 1 頁</div>
+      {ticket.formType === 'RD' && (
+        <section className="print-section mb-3">
+          <h2 className="mb-2 text-sm font-bold text-slate-900">財會記錄欄位</h2>
+          <div className="grid grid-cols-5 overflow-hidden rounded-md border border-slate-300">
+            {financeRecordRoles.map((role) => (
+              <div key={role} className="min-h-[78px] border-r border-slate-300 px-2 py-1.5 last:border-r-0">
+                <div className="mb-1 text-center text-[11px] font-bold text-slate-900">{role}</div>
+                <div className="h-8"></div>
+                <div className="border-t border-slate-300 pt-1.5 text-left text-[10px] leading-4 text-slate-700">
+                  <div>簽核:</div>
+                  <div>日期:</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="print-page-number">第 1 頁 / 共 {pageTotal} 頁</div>
     </div>
+    {hasBankbookAppendix && (
+      <div className="print-page hidden print:block bg-white text-slate-950 text-[11px] leading-relaxed">
+        <div className="break-before-page">
+          <header className="mb-4 border-b-2 border-slate-950 pb-2">
+            <h1 className="text-xl font-bold text-slate-950">存摺封面附件</h1>
+            <p className="mt-1 font-mono text-sm text-slate-700">{ticket.id}</p>
+          </header>
+          {isImageUrl(bankbookCoverUrl) ? (
+            <img src={bankbookCoverUrl} alt="存摺封面" className="max-h-[240mm] w-full object-contain" />
+          ) : (
+            <div className="rounded-md border border-slate-300 p-4 leading-6">
+              <p className="font-bold">存摺封面檔案連結</p>
+              <p className="mt-2 break-all">{bankbookCoverUrl}</p>
+              <p className="mt-4 text-slate-500">此連結非圖片格式或無法由瀏覽器直接嵌入時，請於紙本後續頁檢附檔案列印本。</p>
+            </div>
+          )}
+          <div className="print-page-number">第 2 頁 / 共 2 頁</div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -603,6 +671,9 @@ export default function SubmitForm({ user }: { user: any }) {
                     {field.label}
                     {field.required && ' *'}
                   </label>
+                  {formType === 'RD' && field.id === 'description' && (
+                    <p className="mb-2 text-xs font-medium text-slate-500">$5,000元以上須檢附請/採購單正本或簽呈單正本</p>
+                  )}
                   {field.type === 'select' ? (
                     <select
                       className="form-input !pl-4"
